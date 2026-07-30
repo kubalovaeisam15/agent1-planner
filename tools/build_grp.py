@@ -41,6 +41,13 @@ COLUMNS = ["СДР", "Ид.", "Уровень структуры", "Назван
            "Длительность", "Начало", "Окончание", "Предшественники", "Последователи",
            "комментарий"]
 
+# Старт эталонного проекта — typGRP.md §1.1. База для переноса календарных якорей.
+ETALON_START = dparse("10.01.2023")
+
+# Вход блока ЗОС. В эталоне удерживается календарём; здесь привязывается к финишу
+# отделки, чтобы сдвиг отделки доходил до РВЭ и передачи — DEC-09.
+ZOS_ENTRY = "12.1.3.1"
+
 
 class Build:
     def __init__(self, project: dict) -> None:
@@ -50,6 +57,11 @@ class Build:
         self.notices: list[str] = []
         self.rows: list[dict] = []
         self.start = dparse(project["старт_проекта"])
+        # Календарные якоря эталона — абсолютные даты его собственного проекта.
+        # Для любого другого проекта они переносятся на разницу стартов, иначе
+        # регламентные вехи фазы A встают раньше начала работ.
+        self.shift = (self.start - ETALON_START).days
+        self.fit_tasks: list[tuple[str, str]] = []   # (СДР задачи отделки, код объекта)
 
     # -- служебное ------------------------------------------------------
     def note(self, code: str, text: str, scope: str = "") -> None:
@@ -343,7 +355,7 @@ class Build:
             n = Node(key=r["СДР"], duration=dur,
                      links=[(t, k, lg) for t, k, lg in r["links"] if t not in summaries])
             if not n.links and r.get("tpl_start"):
-                n.anchor_start = dparse(r["tpl_start"])
+                n.anchor_start = dparse(r["tpl_start"]) + timedelta(days=self.shift)
             nodes[r["СДР"]] = n
         return nodes
 
@@ -352,6 +364,27 @@ class Build:
         forward_pass(nodes, self.start)
         backward_pass(nodes)
         return nodes
+
+    def wire_zos(self) -> None:
+        """Вход блока ЗОС → финиш отделки самого позднего объекта.
+
+        В эталоне 12.1.3.1 удерживается календарной датой, поэтому сдвиг отделки
+        по DEC-09 до РВЭ не доходил. Веха РВЭ по очереди определяется самым поздним
+        корпусом — CLAUDE.md §4.
+        """
+        by = self.by_sdr()
+        if ZOS_ENTRY not in by or not self.fit_tasks:
+            return
+        by[ZOS_ENTRY]["links"] = [(sdr, "ОН", 0) for sdr, _ in self.fit_tasks]
+        by[ZOS_ENTRY]["tpl_start"] = ""
+        by[ZOS_ENTRY]["комментарий"] = (
+            "Вход блока ЗОС привязан к финишу отделки всех объектов (ОН+0). "
+            "Веха РВЭ определяется самым поздним объектом — CLAUDE.md §4; "
+            "сдвиг отделки распространяется на РВЭ и передачу — DEC-09")
+        self.why("Блок ЗОС → РВЭ", f"привязан к отделке {len(self.fit_tasks)} объектов",
+                 "CLAUDE.md §4 · DEC-09", "средняя",
+                 "В эталоне вход блока удерживался календарём, из-за чего сдвиг отделки "
+                 "не доходил до РВЭ")
 
     def report_anchors(self, nodes: dict[str, Node]) -> None:
         """Задачи без предшественников удерживаются календарной датой эталона.
@@ -445,10 +478,55 @@ class Build:
                            "Пуск тепла, BND-TC-003: max(TC_eff, ИТП) + 15 дн; "
                            "отопление исключено (DEC-07)")
 
-            for sdr in (f"{pre}.3.1", f"{pre}.3.2"):
-                link_to_anchor(sdr, res.fit_start, res.fit_duration,
-                               f"BND-OTD-002/003: старт от ЯКОРЬ_ОГР +90 через сезонный гейт, "
-                               f"длительность {res.fit_duration} дн (минимум 210)")
+            # Отделка. Пишется в задачи-ЛИСТЬЯ (уровень 7), а не в суммарные строки:
+            # BND-OTD-001 — по переделам не декомпозируется, квартиры параллельно МОП.
+            for suffix in ("3.1.2.1", "3.1.3.1", "3.1.4.1", "3.1.5.1", "3.2.2.1", "3.2.3.1"):
+                sdr = f"{pre}.{suffix}"
+                if sdr in by:
+                    link_to_anchor(sdr, res.fit_start, res.fit_duration,
+                                   f"BND-OTD-002/003: старт от ЯКОРЬ_ОГР +90 через сезонный "
+                                   f"гейт, длительность {res.fit_duration} дн (минимум 210)")
+                    self.fit_tasks.append((sdr, corpus["код"]))
+
+            # Отделка техпомещений — другой норматив: 60 дн, НН+21 от старта перегородок
+            tech = f"{pre}.3.3.1"
+            if tech in by and partitions:
+                by[tech]["Длительность"] = Std.TECH_ROOMS[0]
+                by[tech]["links"] = [(f"{pre}.1.3.2", "НН", Bnd.LAG_TECH_ROOMS[0])]
+                by[tech]["tpl_start"] = ""
+                by[tech]["комментарий"] = (f"{Std.TECH_ROOMS[1]} · BND-VIS-004: НН "
+                                           f"+{Bnd.LAG_TECH_ROOMS[0]} дн от старта перегородок")
+
+            # Финиши, привязанные к ЯКОРЬ. Длительность выводится из окна
+            # «старт → расчётный финиш», финиш ограничением не задаётся (bindings.md §1).
+            def finish_at_anchor(sdr: str, offset: int, label: str, src: str) -> None:
+                node = nodes.get(sdr)
+                if sdr not in by or node is None:
+                    return
+                fin = anchor + timedelta(days=offset)
+                dur = (fin - node.start).days
+                if dur <= 0:
+                    self.note(src, f"{corpus['код']}: расчётный финиш «{label}» "
+                                   f"({dfmt(fin)}) не позже старта ({dfmt(node.start)}). "
+                                   f"Длительность шаблона сохранена.", corpus["код"])
+                    return
+                by[sdr]["Длительность"] = dur
+                by[sdr]["комментарий"] = f"{label}: финиш ЯКОРЬ +{offset} дн — {src}"
+
+            finish_at_anchor(f"{pre}.1.3.1", Bnd.FIN_MASONRY_EXT[0],
+                             "Кладка наружных стен", Bnd.FIN_MASONRY_EXT[1])
+            finish_at_anchor(f"{pre}.1.3.2", Bnd.FIN_MASONRY_INT[0],
+                             "Кладка перегородок", Bnd.FIN_MASONRY_INT[1])
+            if glaze.get("пвх"):
+                off = Bnd.FIN_PVC[0] if not glaze.get("витражи_на_всю_высоту") \
+                    else Bnd.FIN_PVC_NO_MASONRY[0]
+                finish_at_anchor(f"{pre}.1.6.1", off, "СПК ПВХ", Bnd.FIN_PVC[1])
+            if glaze.get("витражи"):
+                finish_at_anchor(f"{pre}.1.6.2", Bnd.FIN_STAINED[0],
+                                 "Витражи", Bnd.FIN_STAINED[1])
+            finish_at_anchor(f"{pre}.1.5.1", fac_days, "Монтаж фасадов",
+                             Bnd.FIN_FACADE[1] if fac_days == Bnd.FIN_FACADE[0]
+                             else Bnd.FIN_FACADE_MODULAR[1])
 
             self.why(f"Тепловой контур {corpus['код']}",
                      f"TC_perm {dfmt(res.tc_perm)} · пуск тепла {dfmt(res.heat)}",
@@ -462,8 +540,31 @@ class Build:
                     f"{corpus['код']}: финиш отделки выходит за ЯКОРЬ + 365 на "
                     f"{res.overrun_days} дн. РВЭ и передача сдвинуты на ту же величину (DEC-09).")
 
-            # SEA-02: кровля с коэффициентом к попавшей части
-            for sdr in (f"{pre}.1.7.1", f"{pre}.1.7.2"):
+            # Стилобат: состав задач принят по корпусу (STD-ZC-008), кровля 90 дн
+            if corpus.get("_стилобат"):
+                for sdr in (f"{pre}.1.7.1.1", f"{pre}.1.7.2.1"):
+                    if sdr in by and by[sdr]["Длительность"]:
+                        by[sdr]["Длительность"] = Std.ROOF_STYLOBATE[0]
+                self.note("STD-ZC-008 / DEC-21",
+                          "Стилобат развёрнут по структуре корпуса: нормативы монолита §8–§9 "
+                          "применены без изменений, кровля 90 дн (STD-KRV-003). Состав ВИС и "
+                          "отделки принят по корпусу — типового блока стилобата в шаблоне нет, "
+                          "требует подтверждения владельца.", corpus["код"])
+                self.why(f"Стилобат {corpus['код']}", f"кровля {Std.ROOF_STYLOBATE[0]} дн",
+                         Std.ROOF_STYLOBATE[1], "низкая",
+                         "Отличается от корпуса (60 дн). Прочие нормативы — по корпусу, STD-ZC-008")
+
+            # BND-FAS-004: кровля — связь ОН от «Монолит кровли/парапета».
+            # В эталоне связь ведёт в другое место и даёт кровлю раньше монолита.
+            for sdr in (f"{pre}.1.7.1.1", f"{pre}.1.7.2.1"):
+                if sdr in by:
+                    by[sdr]["links"] = [(roof_key, "ОН", 0)]
+                    by[sdr]["tpl_start"] = ""
+                    by[sdr]["комментарий"] = "BND-FAS-004: ОН от монолита кровли/парапета"
+
+            # SEA-02: кровля с коэффициентом к попавшей части.
+            # Целятся листья уровня 7 («По договору …»), а не суммарные строки.
+            for sdr in (f"{pre}.1.7.1.1", f"{pre}.1.7.2.1"):
                 node = nodes.get(sdr)
                 if node and sdr in by and by[sdr]["Длительность"]:
                     base = by[sdr]["Длительность"]
@@ -658,6 +759,22 @@ def main() -> int:
     print(f"Проект: {project['название']}")
     print(f"Корпусов: {len(project['корпуса'])} · старт {project['старт_проекта']}\n")
 
+    # DEC-21: стилобат учитывается, только если этажность подана во входных данных.
+    # STD-ZC-008: нормативы монолита корпуса применяются к нему без изменений,
+    # поэтому он разворачивается тем же механизмом, что и корпус.
+    st = project.get("стилобат", {})
+    if st.get("есть") and st.get("этажей_надземных"):
+        project["корпуса"] = project["корпуса"] + [{
+            "код": st.get("код", "СТ"),
+            "этажей_надземных": st["этажей_надземных"],
+            "этажей_подземных": st.get("этажей_подземных", 0),
+            "секций": st.get("секций", 1),
+            "сложный_конструктив": st.get("сложный_конструктив", False),
+            "_стилобат": True,
+        }]
+        print(f"Стилобат: {st['этажей_надземных']} надземн. этаж(а) — "
+              f"развёрнут как объект (STD-ZC-008, DEC-21)")
+
     b.load_skeleton()
     b.repair_defects()
     # Порядок существен: нормативы применяются к эталонному блоку 11.4.2 ДО
@@ -670,6 +787,7 @@ def main() -> int:
 
     nodes = b.schedule()                 # проход 1
     b.thermal(nodes)
+    b.wire_zos()
     nodes = b.schedule()                 # проход 2 — после теплового блока
     b.report_anchors(nodes)
     rows = b.finalize(nodes)
