@@ -131,8 +131,9 @@ class Bnd:
     FIN_STAINED = (120, "bindings.md §3.3 BND-SPK-002, финиш витражей ЯКОРЬ +120")
     FIN_FACADE = (330, "bindings.md §3.4 BND-FAS-001/002, финиш ЯКОРЬ +330")
     FIN_FACADE_MODULAR = (210, "bindings.md §3.4 BND-FAS-003, финиш ЯКОРЬ +210")
-    FIN_VIS = (365, "bindings.md §3.6 BND-VIS-001, финиш ЯКОРЬ +365")
-    FIN_EOM = (330, "bindings.md §3.6 BND-VIS-002, финиш ЯКОРЬ +330")
+    # DEC-23: единое правило для всего блока ВИС, различие 365/330 упразднено
+    FIN_VIS = (330, "bindings.md §3.6 BND-VIS-001, финиш ЯКОРЬ +330 (DEC-23)")
+    FIN_EOM = (330, "bindings.md §3.6 BND-VIS-002, финиш ЯКОРЬ +330 (DEC-23)")
 
     # Контрольные календарные даты теплового контура — bindings.md §3.5
     DEADLINE_PERM = (10, 15)   # 15 октября — крайний срок замыкания постоянного контура
