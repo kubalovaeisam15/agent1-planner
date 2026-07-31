@@ -83,6 +83,8 @@ class Std:
 
     # §14 ВИС
     ITP = (200, "standards.md §14 STD-VIS-001, ЦТП/ИТП")
+    # DEC-07 закрыт 31.07.2026: норматив задан, связь с пуском тепла ОН+0
+    HEAT_LOOP = (120, "standards.md §14 STD-VIS-006, отопление — контур для пуска тепла")
     ELEVATORS = (150, "standards.md §14 STD-VIS-004, DEC-11")
     COMMISSIONING = (30, "standards.md §14 STD-VIS-005, блок 11.5")
 
@@ -250,6 +252,7 @@ def compute_thermal_and_fit(
     facade_finish: date | None,
     partitions_start: date,
     has_parking: bool,
+    heat_loop_finish: date | None = None,
 ) -> CorpusResult:
     """Шаги 7–11 алгоритма bindings.md §2. Порядок шагов существен."""
     a: list[Assumption] = []
@@ -287,8 +290,13 @@ def compute_thermal_and_fit(
                                       "Лишние позиции удаляет пользователь."))
 
     def heat_from(tc_effective: date) -> date:
-        # BND-TC-003: max(TC_eff, ИТП, отопление) + 15. Отопление исключено — DEC-07.
-        return max(tc_effective, itp_finish) + timedelta(days=Bnd.LAG_HEAT[0])
+        # BND-TC-003: max(TC_eff, ИТП) + 15 дн.
+        # Отопление — контур для пуска тепла входит отдельной связью ОН+0,
+        # без лага 15 дн (DEC-07, решение владельца 31.07.2026).
+        base = max(tc_effective, itp_finish) + timedelta(days=Bnd.LAG_HEAT[0])
+        if heat_loop_finish is not None:
+            base = max(base, heat_loop_finish)
+        return base
 
     def gate(heat_date: date) -> date:
         # BND-OTD-002, сезонный гейт SEA-03
@@ -297,8 +305,13 @@ def compute_thermal_and_fit(
             return date(year + 1, *Bnd.SPRING_WINDOW)
         return s0
 
-    a.append(Assumption("DEC-07", "Норматив «Отопление — контур для пуска тепла» (STD-VIS-006) "
-                                  "не задан: член исключён из max() формулы пуска тепла."))
+    if heat_loop_finish is None:
+        a.append(Assumption("DEC-07", "Норматив «Отопление — контур для пуска тепла» "
+                                      "(STD-VIS-006) не задан: член исключён из формулы "
+                                      "пуска тепла."))
+    else:
+        tr.append(f"Отопление — контур для пуска тепла: финиш {dfmt(heat_loop_finish)}, "
+                  f"связь ОН+0 с пуском тепла ({Std.HEAT_LOOP[1]})")
 
     # --- шаги 8–9 без ВТК -------------------------------------------------
     temp_contour = None

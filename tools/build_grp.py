@@ -502,11 +502,23 @@ class Build:
                         else Bnd.FIN_FACADE[0])
             fac_fin = anchor + timedelta(days=fac_days)
 
+            # Отопление — контур для пуска тепла (STD-VIS-006, DEC-07).
+            # Норматив 120 дн, связь с вехой пуска тепла ОН+0 — без лага 15 дн,
+            # который действует для прочих членов BND-TC-003.
+            heat_loop = f"{pre}.2.4.1"
+            loop_node = nodes.get(heat_loop)
+            loop_finish = None
+            if loop_node and heat_loop in by:
+                by[heat_loop]["Длительность"] = Std.HEAT_LOOP[0]
+                by[heat_loop]["комментарий"] = (
+                    f"{Std.HEAT_LOOP[1]} · ОН+0 к вехе «Пуск тепла» (DEC-07)")
+                loop_finish = loop_node.start + timedelta(days=Std.HEAT_LOOP[0])
+
             res = compute_thermal_and_fit(
                 anchor=anchor, anchor_ogr=anchor_ogr, facade_type=facade,
                 pvc_finish=pvc_fin, stained_finish=st_fin, facade_finish=fac_fin,
                 partitions_start=partitions.start if partitions else anchor_ogr,
-                has_parking=has_parking,
+                has_parking=has_parking, heat_loop_finish=loop_finish,
             )
             self.assumptions.extend(
                 Assumption(a.code, a.text, corpus["код"]) for a in res.assumptions)
@@ -536,8 +548,10 @@ class Build:
                 self.note("BND-TC-002", "ВТК не развёрнут: условие не выполнено либо "
                                         "развёртывание не даёт эффекта.", corpus["код"])
             link_to_anchor(f"{pre}.2.9", res.heat, 0,
-                           "Пуск тепла, BND-TC-003: max(TC_eff, ИТП) + 15 дн; "
-                           "отопление исключено (DEC-07)")
+                           "Пуск тепла, BND-TC-003: max(TC_eff, ИТП) + 15 дн, "
+                           "плюс отопление ОН+0 (DEC-07)")
+            if loop_finish is not None and f"{pre}.2.9" in by:
+                by[f"{pre}.2.9"]["links"].append((heat_loop, "ОН", 0))
 
             # Отделка. Пишется в задачи-ЛИСТЬЯ (уровень 7), а не в суммарные строки:
             # BND-OTD-001 — по переделам не декомпозируется, квартиры параллельно МОП.
@@ -601,7 +615,6 @@ class Build:
                         if (r["СДР"] == prefix or r["СДР"].startswith(prefix + "."))
                         and r["СДР"] not in summ_now]
 
-            heat_loop = f"{pre}.2.4.1"      # «Отопление — контур для пуска тепла», DEC-07
             vis_blocks = [
                 (f"{pre}.2.2", Bnd.FIN_VIS, "ВИС сантехнические"),
                 (f"{pre}.2.4", Bnd.FIN_VIS, "ВИС отопление"),
@@ -614,7 +627,7 @@ class Build:
             for blk, (off, src), label in vis_blocks:
                 for leaf in leaves_under(blk):
                     if leaf == heat_loop:
-                        continue          # норматив STD-VIS-006 не задан — DEC-07
+                        continue          # свой норматив 120 дн — STD-VIS-006, DEC-07
                     before = by[leaf]["Длительность"] if leaf in by else None
                     finish_at_anchor(leaf, off, label, src)
                     if leaf in by and by[leaf]["Длительность"] != before:
@@ -626,10 +639,12 @@ class Build:
                          f"ЭОМ = ЯКОРЬ +{Bnd.FIN_EOM[0]} дн ({dfmt(anchor + timedelta(days=Bnd.FIN_EOM[0]))}). "
                          f"Статические 400 дн шаблона не переносятся — длительность выводится "
                          f"из окна «старт → расчётный финиш»")
-            self.note("DEC-07",
-                      f"{corpus['код']}: задача «Отопление — контур для пуска тепла» "
-                      f"({heat_loop}) оставлена с длительностью шаблона — норматив "
-                      f"STD-VIS-006 не задан.", corpus["код"])
+            if loop_finish is not None:
+                self.why(f"Отопление — контур для пуска тепла {corpus['код']}",
+                         f"{Std.HEAT_LOOP[0]} дн, финиш {dfmt(loop_finish)}",
+                         Std.HEAT_LOOP[1] + " · DEC-07", "средняя",
+                         "Связь с вехой «Пуск тепла» — ОН+0, без лага 15 дн, который "
+                         "действует для прочих членов BND-TC-003")
 
             self.why(f"Тепловой контур {corpus['код']}",
                      f"TC_perm {dfmt(res.tc_perm)} · пуск тепла {dfmt(res.heat)}",
