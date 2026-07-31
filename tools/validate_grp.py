@@ -150,10 +150,18 @@ def validate(tasks: list[dict]) -> int:
                 children[p].append(t)
     summaries = {s for s in children}
 
+    # §2.2 п.4 в редакции с 31.07.2026: у суммарных строк пусты ДЛИТЕЛЬНОСТЬ и
+    # ПРЕДШЕСТВЕННИКИ (именно они ломают импорт). Даты выводятся — решение
+    # владельца, они свёрнуты из потомков и нужны для чтения выгрузки.
     dirty = [t["СДР"] for t in tasks if t["СДР"] in summaries and (
-        t.get("Длительность") or t.get("Начало") or t.get("Окончание") or t.get("Предшественники"))]
-    r.check(not dirty, "у суммарных строк пусты длительность/даты/связи",
+        t.get("Длительность") or t.get("Предшественники"))]
+    r.check(not dirty, "у суммарных строк пусты длительность и предшественники",
             f"{len(dirty)} нарушений (§2.2 п.4), напр. {dirty[:5]}")
+
+    undated = [t["СДР"] for t in tasks if t["СДР"] in summaries
+               and not (t.get("Начало") and t.get("Окончание"))]
+    r.check(not undated, "у суммарных строк проставлены даты",
+            f"{len(undated)} без дат, напр. {undated[:5]}", warn_only=True)
 
     orphan_parents = [s for s in summaries if s not in all_sdr]
     r.check(not orphan_parents, "все промежуточные суммарные строки присутствуют",
