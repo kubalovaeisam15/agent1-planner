@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -237,22 +238,41 @@ class Build:
                 by[sdr]["Длительность"] = value
                 by[sdr]["источник"] = source
 
-        # --- ограждение котлована и земляные работы (STD-ZC-001/002) ---
-        if wall_type not in Std.PIT_WALL:
-            self.note("standards.md §4", f"Тип ограждения котлована «{wall_type}» не распознан — "
-                                         f"принят трубошпунт по умолчанию.")
-            wall_type = "трубошпунт"
-        wall_days, wall_inc, wall_lag = Std.PIT_WALL[wall_type]
-        earth_days, earth_inc = Std.EARTH[wall_type]
-        set_dur("11.4.1.1.2.1", wall_days, Std.PIT_WALL_SRC)
+        # --- земляные работы (STD-ZC-002) — считаются по фактическому типу, включая «отвал» ---
+        if wall_type in Std.EARTH:
+            earth_days, earth_inc = Std.EARTH[wall_type]
+        else:
+            self.note("standards.md §6", f"Тип ограждения котлована «{wall_type}» не распознан "
+                                          f"для земляных работ — принят трубошпунт по умолчанию.")
+            earth_days, earth_inc = Std.EARTH["трубошпунт"]
         set_dur("11.4.1.1.1.1", earth_days, Std.EARTH_SRC)
-        if "11.4.1.1.2.1" in by:
-            by["11.4.1.1.2.1"]["links"] = [("11.4.1.1.1.1", "НН", wall_lag)]
-        self.why("Ограждение котлована", f"{wall_days} дн, НН {wall_lag:+d} дн от земляных",
-                 Std.PIT_WALL_SRC, "высокая", f"Тип: {wall_type}")
         self.why("Земляные работы", f"{earth_days} дн", Std.EARTH_SRC, "высокая",
                  f"По типу ограждения, не по этажности подземной части (DEC-03). "
                  f"Приращение старта ФП следующих корпусов +{earth_inc} дн")
+
+        # --- ограждение котлована (STD-ZC-001) — норматив есть только для трубошпунта/СВГ/БСС ---
+        if wall_type == "отвал":
+            self.note("standards.md §5 — открытый вопрос", "Вход «отвал» (без ограждения котлована): "
+                      "standards.md §5 STD-ZC-001 не содержит норматива для этого варианта (только "
+                      "трубошпунт/СВГ/БСС), хотя §6 STD-ZC-002 и шаблон входа его допускают. "
+                      "Задача 11.4.1.1.2.1 «Ограждение котлована» и её 3 последователя (Ид. 77, 1138, "
+                      "1139) в выдаче временно сохранены со связями трубошпунта — переносить их на "
+                      "земляные работы без правила привязки нельзя (CLAUDE.md §0.3). Требуется решение "
+                      "владельца: добавить строку «отвал» в standards.md §5 и правило перепривязки "
+                      "последователей.")
+            wall_days, wall_inc, wall_lag = Std.PIT_WALL["трубошпунт"]
+        elif wall_type not in Std.PIT_WALL:
+            self.note("standards.md §4", f"Тип ограждения котлована «{wall_type}» не распознан — "
+                                         f"принят трубошпунт по умолчанию.")
+            wall_days, wall_inc, wall_lag = Std.PIT_WALL["трубошпунт"]
+        else:
+            wall_days, wall_inc, wall_lag = Std.PIT_WALL[wall_type]
+        set_dur("11.4.1.1.2.1", wall_days, Std.PIT_WALL_SRC)
+        if "11.4.1.1.2.1" in by:
+            by["11.4.1.1.2.1"]["links"] = [("11.4.1.1.1.1", "НН", wall_lag)]
+        self.why("Ограждение котлована", f"{wall_days} дн, НН {wall_lag:+d} дн от земляных",
+                 Std.PIT_WALL_SRC, "средняя" if wall_type == "отвал" else "высокая",
+                 f"Тип: {wall_type}" + (" — норматив §5 не покрывает «отвал», см. допущения" if wall_type == "отвал" else ""))
 
         # --- свайное основание (STD-ZC-003/004) ---
         pile_days, pile_trace = pile_duration(zc.get("сваи", []))
@@ -341,6 +361,84 @@ class Build:
                       f"не применено — в шаблоне отсутствует покорпусный блок фундаментной плиты. "
                       f"Нулевые циклы корпусов не разнесены каскадом.", corpus["код"])
         self.rows[tail:tail] = clones
+
+    # ==================================================================
+    # 4а. Связи на суммарные строки — §13 расх. 14
+    # ==================================================================
+    def resolve_summary_links(self) -> None:
+        """Переносит связи с суммарных строк на их листья, а не отбрасывает.
+
+        typGRP.md §2.2 п.5 требует ставить связи только на листья, но в эталоне
+        61 связь ведёт на суммарные строки. Простое отбрасывание оставляло
+        35 задач — почти все контрольные вехи раздела 1 — без предшественников.
+
+        Смысл связи на суммарную строку однозначен:
+          финиш суммарной = максимум финишей потомков → ОН/ОО разворачиваются
+            во ВСЕ листья ветки (прямой ход берёт максимум — результат тот же);
+          старт суммарной = минимум стартов потомков → НН/НО привязываются
+            к листу с самым ранним стартом по календарю эталона.
+        """
+        summaries = self.summaries()
+        children: dict[str, list[str]] = defaultdict(list)
+        for r in self.rows:
+            s = r["СДР"]
+            if "." in s:
+                children[s.rsplit(".", 1)[0]].append(s)
+
+        def leaves_of(sdr: str) -> list[str]:
+            out, stack = [], [sdr]
+            while stack:
+                cur = stack.pop()
+                if cur in summaries:
+                    stack.extend(children.get(cur, []))
+                else:
+                    out.append(cur)
+            return out
+
+        tpl = {r["СДР"]: (r.get("tpl_start") or "") for r in self.rows}
+
+        def earliest(leaves: list[str]) -> str:
+            dated = [(dparse(tpl[l]), l) for l in leaves if tpl.get(l)]
+            return min(dated)[1] if dated else sorted(leaves)[0]
+
+        rewritten = 0
+        rescued = 0
+        for r in self.rows:
+            had = bool(r["links"])
+            new: list[tuple[str, str, int]] = []
+            for tgt, kind, lag in r["links"]:
+                if tgt not in summaries:
+                    new.append((tgt, kind, lag))
+                    continue
+                lv = leaves_of(tgt)
+                if not lv:
+                    continue
+                rewritten += 1
+                if kind in ("ОН", "ОО"):
+                    new.extend((l, kind, lag) for l in lv)
+                else:
+                    new.append((earliest(lv), kind, lag))
+            seen, dedup = set(), []
+            for lk in new:
+                if lk not in seen:
+                    seen.add(lk)
+                    dedup.append(lk)
+            if had and not r["links"]:
+                pass
+            if dedup and not any(t not in summaries for t, _, _ in r["links"]):
+                rescued += 1
+            r["links"] = dedup
+
+        if rewritten:
+            self.note("typGRP.md §13 расх. 14",
+                      f"{rewritten} связей эталона вели на суммарные строки. Перенесены на "
+                      f"листья ветки: ОН/ОО — на все потомки (максимум финишей), НН/НО — на "
+                      f"лист с самым ранним стартом. Без этого {rescued} задач, в основном "
+                      f"контрольные вехи раздела 1, оставались без предшественников.")
+            self.why("Связи на суммарные строки", f"{rewritten} перенесено на листья",
+                     "typGRP.md §2.2 п.5 · §13 расх. 14", "средняя",
+                     "Отбрасывание таких связей обрывало критический путь и переводило "
+                     "вехи на календарные якоря")
 
     # ==================================================================
     # 5. Сетевой расчёт
@@ -784,6 +882,7 @@ def main() -> int:
     b.replicate()
     for ci, corpus in enumerate(project["корпуса"], start=2):
         b.rebuild_monolith(ci, corpus)
+    b.resolve_summary_links()            # после всех структурных изменений
 
     nodes = b.schedule()                 # проход 1
     b.thermal(nodes)
