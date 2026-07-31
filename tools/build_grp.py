@@ -585,6 +585,48 @@ class Build:
                              Bnd.FIN_FACADE[1] if fac_days == Bnd.FIN_FACADE[0]
                              else Bnd.FIN_FACADE_MODULAR[1])
 
+            # --- ВИС: длительность выводится из финиша по ЯКОРЬ ------------
+            # BND-VIS-001 — ВИС кроме ЭОМ: ЯКОРЬ +365
+            # BND-VIS-002 — электроснабжение и электроосвещение: ЯКОРЬ +330
+            # Различие намеренное (bindings.md §3.6, typGRP.md §13.1).
+            # В шаблоне у всех этих задач статические 400 дн — они не переносятся.
+            summ_now = self.summaries()
+
+            def leaves_under(prefix: str) -> list[str]:
+                return [r["СДР"] for r in self.rows
+                        if (r["СДР"] == prefix or r["СДР"].startswith(prefix + "."))
+                        and r["СДР"] not in summ_now]
+
+            heat_loop = f"{pre}.2.4.1"      # «Отопление — контур для пуска тепла», DEC-07
+            vis_blocks = [
+                (f"{pre}.2.2", Bnd.FIN_VIS, "ВИС сантехнические"),
+                (f"{pre}.2.4", Bnd.FIN_VIS, "ВИС отопление"),
+                (f"{pre}.2.5", Bnd.FIN_VIS, "ВИС вентиляция и дымоудаление"),
+                (f"{pre}.2.6", Bnd.FIN_VIS, "ВИС кондиционирование"),
+                (f"{pre}.2.7", Bnd.FIN_VIS, "ВИС слаботочные"),
+                (f"{pre}.2.8", Bnd.FIN_EOM, "ЭОМ электроснабжение и электроосвещение"),
+            ]
+            changed = 0
+            for blk, (off, src), label in vis_blocks:
+                for leaf in leaves_under(blk):
+                    if leaf == heat_loop:
+                        continue          # норматив STD-VIS-006 не задан — DEC-07
+                    before = by[leaf]["Длительность"] if leaf in by else None
+                    finish_at_anchor(leaf, off, label, src)
+                    if leaf in by and by[leaf]["Длительность"] != before:
+                        changed += 1
+            if changed:
+                self.why(f"ВИС {corpus['код']}", f"{changed} задач пересчитано от ЯКОРЬ",
+                         "bindings.md §3.6 BND-VIS-001 / BND-VIS-002", "высокая",
+                         f"Финиш ВИС = ЯКОРЬ +{Bnd.FIN_VIS[0]} дн ({dfmt(anchor + timedelta(days=Bnd.FIN_VIS[0]))}), "
+                         f"ЭОМ = ЯКОРЬ +{Bnd.FIN_EOM[0]} дн ({dfmt(anchor + timedelta(days=Bnd.FIN_EOM[0]))}). "
+                         f"Статические 400 дн шаблона не переносятся — длительность выводится "
+                         f"из окна «старт → расчётный финиш»")
+            self.note("DEC-07",
+                      f"{corpus['код']}: задача «Отопление — контур для пуска тепла» "
+                      f"({heat_loop}) оставлена с длительностью шаблона — норматив "
+                      f"STD-VIS-006 не задан.", corpus["код"])
+
             self.why(f"Тепловой контур {corpus['код']}",
                      f"TC_perm {dfmt(res.tc_perm)} · пуск тепла {dfmt(res.heat)}",
                      "bindings.md §3.5 BND-TC-001…003", "средняя", " · ".join(res.trace))
