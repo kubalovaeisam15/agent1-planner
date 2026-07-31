@@ -365,96 +365,55 @@ class Build:
     # ==================================================================
     # 4а. Связи на суммарные строки — §13 расх. 14
     # ==================================================================
-    def resolve_summary_links(self) -> None:
-        """Переносит связи с суммарных строк на их листья, а не отбрасывает.
+    def count_summary_links(self) -> None:
+        """Связи на суммарные строки сохраняются как в шаблоне — только учёт.
 
-        typGRP.md §2.2 п.5 требует ставить связи только на листья, но в эталоне
-        61 связь ведёт на суммарные строки. Простое отбрасывание оставляло
-        35 задач — почти все контрольные вехи раздела 1 — без предшественников.
-
-        Смысл связи на суммарную строку однозначен:
-          финиш суммарной = максимум финишей потомков → ОН/ОО разворачиваются
-            во ВСЕ листья ветки (прямой ход берёт максимум — результат тот же);
-          старт суммарной = минимум стартов потомков → НН/НО привязываются
-            к листу с самым ранним стартом по календарю эталона.
+        Решение владельца 31.07.2026: связь ставится на суммарную задачу, а не
+        разворачивается в её подзадачи. Суммарная строка участвует в расчёте
+        свёрточным узлом (см. build_nodes), собственных данных в выдаче не несёт.
         """
         summaries = self.summaries()
-        children: dict[str, list[str]] = defaultdict(list)
-        for r in self.rows:
-            s = r["СДР"]
-            if "." in s:
-                children[s.rsplit(".", 1)[0]].append(s)
-
-        def leaves_of(sdr: str) -> list[str]:
-            out, stack = [], [sdr]
-            while stack:
-                cur = stack.pop()
-                if cur in summaries:
-                    stack.extend(children.get(cur, []))
-                else:
-                    out.append(cur)
-            return out
-
-        tpl = {r["СДР"]: (r.get("tpl_start") or "") for r in self.rows}
-
-        def earliest(leaves: list[str]) -> str:
-            dated = [(dparse(tpl[l]), l) for l in leaves if tpl.get(l)]
-            return min(dated)[1] if dated else sorted(leaves)[0]
-
-        rewritten = 0
-        rescued = 0
-        for r in self.rows:
-            had = bool(r["links"])
-            new: list[tuple[str, str, int]] = []
-            for tgt, kind, lag in r["links"]:
-                if tgt not in summaries:
-                    new.append((tgt, kind, lag))
-                    continue
-                lv = leaves_of(tgt)
-                if not lv:
-                    continue
-                rewritten += 1
-                if kind in ("ОН", "ОО"):
-                    new.extend((l, kind, lag) for l in lv)
-                else:
-                    new.append((earliest(lv), kind, lag))
-            seen, dedup = set(), []
-            for lk in new:
-                if lk not in seen:
-                    seen.add(lk)
-                    dedup.append(lk)
-            if had and not r["links"]:
-                pass
-            if dedup and not any(t not in summaries for t, _, _ in r["links"]):
-                rescued += 1
-            r["links"] = dedup
-
-        if rewritten:
+        n = sum(1 for r in self.rows for t, _, _ in r["links"] if t in summaries)
+        if n:
             self.note("typGRP.md §13 расх. 14",
-                      f"{rewritten} связей эталона вели на суммарные строки. Перенесены на "
-                      f"листья ветки: ОН/ОО — на все потомки (максимум финишей), НН/НО — на "
-                      f"лист с самым ранним стартом. Без этого {rescued} задач, в основном "
-                      f"контрольные вехи раздела 1, оставались без предшественников.")
-            self.why("Связи на суммарные строки", f"{rewritten} перенесено на листья",
-                     "typGRP.md §2.2 п.5 · §13 расх. 14", "средняя",
-                     "Отбрасывание таких связей обрывало критический путь и переводило "
-                     "вехи на календарные якоря")
+                      f"{n} связей ведут на суммарные строки — сохранены в том виде, как в "
+                      f"эталоне (решение владельца 31.07.2026). Суммарная строка входит в "
+                      f"сетевой расчёт свёрточным узлом: старт = минимум стартов потомков, "
+                      f"финиш = максимум финишей; собственных длительности и связей не имеет.")
+            self.why("Связи на суммарные строки", f"{n} сохранено как в эталоне",
+                     "typGRP.md §2.2 п.5 · §13 расх. 14", "высокая",
+                     "Разворачивание в подзадачи запрещено — меняет вид графика "
+                     "относительно шаблона")
 
     # ==================================================================
     # 5. Сетевой расчёт
     # ==================================================================
     def build_nodes(self) -> dict[str, Node]:
+        """Сеть включает и суммарные строки.
+
+        Связи эталона ссылаются на суммарные строки (61 штука), и ссылка должна
+        сохраниться ровно такой — решение владельца от 31.07.2026. Поэтому
+        суммарная строка присутствует в расчёте как свёрточный узел: своей
+        длительности и связей не имеет, старт = минимум стартов потомков,
+        финиш = максимум финишей (typGRP.md §2.2 п.4).
+        """
         summaries = self.summaries()
+        children: dict[str, list[str]] = defaultdict(list)
+        for r in self.rows:
+            s = r["СДР"]
+            if "." in s and s.rsplit(".", 1)[0] in summaries:
+                children[s.rsplit(".", 1)[0]].append(s)
+
         nodes: dict[str, Node] = {}
         for r in self.rows:
-            if r["СДР"] in summaries:
+            sdr = r["СДР"]
+            if sdr in summaries:
+                nodes[sdr] = Node(key=sdr, duration=0, rollup=children.get(sdr, []))
                 continue
-            dur = r["Длительность"] or 0
-            n = Node(key=r["СДР"], duration=dur,
-                     links=[(t, k, lg) for t, k, lg in r["links"] if t not in summaries])
+            n = Node(key=sdr, duration=r["Длительность"] or 0, links=list(r["links"]))
             if not n.links and r.get("tpl_start"):
                 n.anchor_start = dparse(r["tpl_start"]) + timedelta(days=self.shift)
-            nodes[r["СДР"]] = n
+            nodes[sdr] = n
         return nodes
 
     def schedule(self) -> dict[str, Node]:
@@ -686,8 +645,9 @@ class Build:
             sdr = r["СДР"]
             is_sum = sdr in summaries
             n = nodes.get(sdr)
-            links = [(sdr2id[t], k, lg) for t, k, lg in r["links"]
-                     if t in sdr2id and t not in summaries]
+            # Ссылка на суммарную строку сохраняется как в шаблоне и НЕ
+            # разворачивается в потомков — решение владельца от 31.07.2026.
+            links = [(sdr2id[t], k, lg) for t, k, lg in r["links"] if t in sdr2id]
             out.append({
                 "СДР": sdr,
                 "Ид.": i,
@@ -882,7 +842,7 @@ def main() -> int:
     b.replicate()
     for ci, corpus in enumerate(project["корпуса"], start=2):
         b.rebuild_monolith(ci, corpus)
-    b.resolve_summary_links()            # после всех структурных изменений
+    b.count_summary_links()              # после всех структурных изменений
 
     nodes = b.schedule()                 # проход 1
     b.thermal(nodes)

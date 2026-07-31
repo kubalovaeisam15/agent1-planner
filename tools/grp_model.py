@@ -414,6 +414,11 @@ class Node:
     duration: int
     links: list[tuple[str, str, int]] = field(default_factory=list)   # (ключ, тип, лаг)
     anchor_start: date | None = None
+    # Суммарная строка WBS: собственных связей и длительности не несёт, её даты
+    # сворачиваются из потомков — старт по минимуму, финиш по максимуму
+    # (typGRP.md §2.2 п.4). Нужна в сети, потому что связи эталона ссылаются
+    # на суммарные строки, и ссылка обязана сохраниться как есть.
+    rollup: list[str] = field(default_factory=list)
     start: date | None = None
     finish: date | None = None
     late_start: date | None = None
@@ -437,6 +442,9 @@ def topo_order(nodes: dict[str, Node]) -> list[str]:
         for pk, _, _ in nodes[k].links:
             if pk in nodes:
                 visit(pk, path + [k])
+        for ck in nodes[k].rollup:          # потомки считаются раньше родителя
+            if ck in nodes:
+                visit(ck, path + [k])
         state[k] = 2
         order.append(k)
 
@@ -449,6 +457,16 @@ def forward_pass(nodes: dict[str, Node], project_start: date) -> None:
     """Ранние даты. Финиш достигается длительностью, не ограничением."""
     for k in topo_order(nodes):
         n = nodes[k]
+
+        if n.rollup:
+            kids = [nodes[c] for c in n.rollup if c in nodes and nodes[c].start]
+            if kids:
+                n.start = min(c.start for c in kids)
+                n.finish = max(c.finish for c in kids)
+            else:
+                n.start = n.finish = project_start
+            continue
+
         candidates: list[date] = []
         for pk, kind, lag in n.links:
             p = nodes.get(pk)
@@ -479,6 +497,11 @@ def backward_pass(nodes: dict[str, Node]) -> None:
         for pk, kind, lag in n.links:
             if pk in nodes:
                 successors[pk].append((k, kind, lag))
+        # Потомок не может финишировать позже своей суммарной строки: связь ОО+0
+        # от потомка к родителю переносит на него поздний финиш родителя.
+        for ck in n.rollup:
+            if ck in nodes:
+                successors[ck].append((k, "ОО", 0))
 
     for k in reversed(order):
         n = nodes[k]

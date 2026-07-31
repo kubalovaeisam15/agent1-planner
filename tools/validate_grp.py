@@ -205,9 +205,13 @@ def validate(tasks: list[dict]) -> int:
 
     r.check(not dangling, "все связи ведут на существующие Ид.",
             f"{len(dangling)} битых, напр. {dangling[:5]}")
-    r.check(not to_summary, "связи стоят только на задачи-листья",
-            f"{len(to_summary)} связей на суммарные строки (§2.2 п.5), напр. {to_summary[:5]}",
-            warn_only=True)
+    # Связь на суммарную строку — норма, а не нарушение: решение владельца
+    # 31.07.2026 (typGRP.md §2.2 п.5, §13 расх. 14). Выводится справочно.
+    if to_summary:
+        r.warns.append(f"справочно: {len(to_summary)} связей ведут на суммарные строки — "
+                       f"это норма (typGRP.md §2.2 п.5), напр. {to_summary[:4]}")
+    else:
+        r.oks.append("связей на суммарные строки нет")
 
     leaves = [t for t in tasks if t["СДР"] in leaf_sdr]
     no_pred = [t["СДР"] for t in leaves if not t.get("Предшественники")]
