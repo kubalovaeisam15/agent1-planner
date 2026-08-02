@@ -246,6 +246,42 @@ def validate(tasks: list[dict]) -> int:
                if not any(all(k in nm for k in keys) for nm in ms_names)]
     r.check(not missing, "все обязательные вехи присутствуют", f"нет: {missing}")
 
+    # --- DEC-30: согласованность ветки чистовой отделки квартир -------------
+    # Список намеренно дублирует MARKERS из tests/test_dec30.py — см. план,
+    # задача 3: тест и валидатор должны падать независимо друг от друга.
+    FLAT_FIT_MARKERS = (
+        "отделочные работы квартиры",
+        "подготовка под чистовую отделку квартир",
+        "чистовая отделка квартир",
+        "тендер отделка квартиры чистовая",
+        "мокап отделки типового этажа",
+        "завершены отделочные работы квартир",
+        "передача квартир с отделкой",
+        "переданы квартиры с отделкой",
+    )
+    lowered = [t["Название задачи"].lower() for t in tasks]
+    present = [m for m in FLAT_FIT_MARKERS if any(m in nm for nm in lowered)]
+    r.check(len(present) in (0, len(FLAT_FIT_MARKERS)),
+            "ветка чистовой отделки квартир согласована (DEC-30)",
+            f"снята частично: осталось {len(present)} из {len(FLAT_FIT_MARKERS)} маркеров — "
+            f"{present}")
+
+    # --- Передача квартир без отделки = РВЭ + 180 дн (standards.md §15.3) ---
+    rve = next((t for t in tasks
+                if t["Название задачи"].strip().lower().startswith("рвэ по этапу")), None)
+    handovers = [t for t in tasks
+                 if t["Название задачи"].strip().lower() == "передача квартир без отделки"]
+    hand = min(handovers, key=lambda t: t["_lvl"]) if handovers else None
+    if rve and hand and rve.get("Окончание") and hand.get("Начало"):
+        delta = (datetime.strptime(hand["Начало"], "%d.%m.%Y")
+                 - datetime.strptime(rve["Окончание"], "%d.%m.%Y")).days
+        r.check(delta == 180,
+                "передача квартир без отделки = РВЭ + 180 дн (standards.md §15.3)",
+                f"фактически +{delta} дн")
+    else:
+        r.warns.append("справочно: веха «Передача квартир без отделки» или «РВЭ по этапу» "
+                       "не найдена — проверка срока передачи пропущена")
+
     return r.dump()
 
 
