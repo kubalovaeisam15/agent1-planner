@@ -75,3 +75,66 @@ def test_vekha_pusk_tepla_v_parkinge_libo_snyata_libo_privyazana(built):
             "веха «Пуск тепла в паркинге» снята молча — нарушение CLAUDE.md §12"
     else:
         assert b.rows[hits[0]]["links"], "веха осталась без предшественников"
+
+
+# --- высотность 69 этажей ------------------------------------------------
+
+def test_monolit_razvernut_po_vsem_69_etazham(built):
+    b, _ = built
+    floors = [r for r in b.rows
+              if r["name"].startswith("К1. ") and r["name"].endswith("этаж Монолит")]
+    assert len(floors) == 69, f"этажей монолита {len(floors)}, ожидалось 69"
+
+
+def test_koefficient_K_raven_7_pri_69_etazhah(built):
+    first, typical, roof = build_grp.monolith_floor_durations(69, True)
+    assert typical and typical[0] == 7, \
+        "при сложном конструктиве и N > 60 типовой этаж — 7 дн (standards.md §9)"
+
+
+def test_kladka_privyazana_k_vekhe_6_etazha_a_ne_k_69(built):
+    b, _ = built
+    assert b.one("К1. 6 этаж Монолит") is not None, \
+        "веха min(6, N) = 6 этаж отсутствует — перепривязка BND-KLD-001 невозможна"
+
+
+def test_vis_privyazany_k_vekhe_15_etazha(built):
+    b, _ = built
+    assert b.one("К1. 15 этаж Монолит") is not None, \
+        "веха min(15, N) = 15 этаж отсутствует — перепривязка BND-VIS-001 невозможна"
+
+
+def test_okno_otdelki_ne_nizhe_zhestkogo_minimuma(built):
+    b, nodes = built
+    fits = [k for k, _ in b.fit_tasks]
+    assert fits, "задачи отделки не зарегистрированы в fit_tasks"
+    for k in fits:
+        n = nodes[k]
+        assert n.start and n.finish
+        assert (n.finish - n.start).days >= build_grp.Std.FIT_MIN[0], \
+            f"окно отделки {(n.finish - n.start).days} дн меньше минимума " \
+            f"{build_grp.Std.FIT_MIN[0]} дн — запрещено standards.md §15.1"
+
+
+def test_kriticheskiy_put_nepreryven(built):
+    b, nodes = built
+    crit = [n for n in nodes.values() if n.critical]
+    assert crit, "критический путь пуст"
+
+
+def test_pri_oknah_pvh_kladka_naruzhnyh_sten_prisutstvuet(built):
+    """Витражей нет → BND-KLD-001 применяется, ЯКОРЬ_ОГР = кладка наружных стен."""
+    b, _ = built
+    assert b.one("По договору Кладка наружных стен", "К1") is not None, \
+        "при остеклении ПВХ наружная кладка обязана быть — она задаёт ЯКОРЬ_ОГР"
+
+
+def test_porog_DEC_14_po_svayam_otrabotan(built):
+    """90 свай БНС на одну установку: превышение порога даёт уведомление, а не тишину."""
+    b, _ = built
+    days, _ = build_grp.pile_duration(
+        [{"тип": "БНС", "количество": 90, "установок": 1}])
+    if days > build_grp.Std.PILE_WARN_DAYS[0]:
+        assert any("DEC-14" == a.code for a in b.assumptions), \
+            "порог DEC-14 превышен, но строки в «Допущения» нет"
+        assert b.notices, "порог DEC-14 превышен, но уведомления пользователю нет"

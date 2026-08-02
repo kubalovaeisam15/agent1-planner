@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 from datetime import date, timedelta
@@ -134,13 +135,20 @@ class Build:
         return out
 
     def find(self, name: str, prefix: str | None = None, exact: bool = True) -> list[int]:
-        """Поиск строк по наименованию (и, при необходимости, префиксу объекта)."""
+        """Поиск строк по наименованию (и, при необходимости, префиксу объекта).
+
+        Без явного `prefix` строка сверяется и с «голым» названием (без
+        префикса объекта), и с названием целиком — вызывающий код вправе
+        передать имя так, как оно выглядит в выдаче, например
+        «К1. 6 этаж Монолит», не выделяя префикс отдельным аргументом.
+        """
         out = []
         for i, r in enumerate(self.rows):
             pref, bare = strip_prefix(r["name"])
             if prefix is not None and pref != prefix:
                 continue
-            if (bare == name) if exact else bare.startswith(name):
+            candidates = (bare,) if prefix is not None else (bare, r["name"])
+            if any((c == name) if exact else c.startswith(name) for c in candidates):
                 out.append(i)
         return out
 
@@ -372,6 +380,14 @@ class Build:
                      "typGRP.md §12.1", "средняя",
                      "Состав задач взят из прототипа; монолит пересобран по этажности, "
                      "финиши выведены от собственного ЯКОРЬ")
+            sections = corpus.get("секций", 1)
+            cranes = max(1, math.ceil(sections / 2))
+            self.why(f"Башенные краны {corpus['код']}", f"{cranes} шт.",
+                     "standards.md §3 / bindings.md §1.2 DEC-01", "высокая",
+                     f"max(1, ceil({sections} секций / 2)) = {cranes}. Величина — параметр "
+                     "состава ПОС, на даты и на выработку монолита не влияет (bindings.md "
+                     "§1.2, `DEC-01`); в задачи графика и ресурсный контур не выводится "
+                     "(CLAUDE.md §4).")
 
         self.rows[first:last + 1] = generated
 
@@ -1142,6 +1158,7 @@ class Build:
                          "Вентиляция, дымоудаление", "Кондиционирование",
                          "Внутренние слаботочные системы", "Электроснабжение и электроосвещение"]
             changed = 0
+            max_vis_dur = 0
             for hname in vis_heads:
                 h = self.one(hname, pref)
                 if h is None:
@@ -1153,6 +1170,7 @@ class Build:
                     finish_at_anchor(j, Bnd.FIN_VIS[0], f"ВИС {hname}", Bnd.FIN_VIS[1])
                     if self.rows[j]["dur"] != before:
                         changed += 1
+                        max_vis_dur = max(max_vis_dur, self.rows[j]["dur"] or 0)
             if changed:
                 self.why(f"ВИС {corpus['код']}", f"{changed} задач пересчитано от ЯКОРЬ",
                          "bindings.md §3.7 BND-VIS-001/002 · DEC-23", "высокая",
@@ -1160,6 +1178,20 @@ class Build:
                          f"({dfmt(anchor + timedelta(days=Bnd.FIN_VIS[0]))}). Статические "
                          f"длительности шаблона не переносятся — длительность выводится из окна "
                          f"«старт по вехе min(15, N) этаж → финиш по ЯКОРЬ»")
+                # bindings.md §3.7 калибрует правило DEC-23 только на этажности эталона:
+                # 410 дн у К1 (26 эт.), 580 дн у К2 (55 эт.). Выше документированного
+                # потолка 55 этажей формула не проверялась ни разу; ни коэффициента,
+                # ни предупреждения для большей этажности комплект не задаёт — это
+                # открытый вопрос владельцу, а не повод изобретать порог (CLAUDE.md §0.3).
+                if n_fl > 55:
+                    self.note("bindings.md §3.7 — открытый вопрос",
+                              f"{corpus['код']}: {n_fl} этажей — выше документированного "
+                              f"потолка калибровки DEC-23 (55 эт., 580 дн на эталоне К2). "
+                              f"Формула ЯКОРЬ +330 даёт {max_vis_dur} дн — заметно больше "
+                              f"любого блока ВИС на эталоне. Ни порога, ни коэффициента для "
+                              f"большей этажности комплект не содержит; изобретать их "
+                              f"запрещено (CLAUDE.md §0.3, §12) — открытый вопрос владельцу "
+                              f"(task-1-diagnostics.md §4 п.4).", corpus["код"])
 
             # --- кровля: ОН от монолита кровли + SEA-02 ---
             for nm in ("Устройство кровли неэксплуатируемой", "Устройство кровли эксплуатируемой"):
