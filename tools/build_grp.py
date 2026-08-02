@@ -567,9 +567,12 @@ class Build:
         for pt, pk, plg in dead.get(key, []):
             if pt in seen:
                 continue
-            seen.add(pt)
             if pt in dead:
-                out.extend(Build._live_preds(pt, dead, seen))
+                # Копия множества на ветку, а не мутация общего: сходящиеся
+                # ветви (диамант через две удаляемые строки на один и тот же
+                # живой узел) обязаны разрешаться независимо, иначе вторая
+                # ветвь молча теряется на проверке "уже видели".
+                out.extend(Build._live_preds(pt, dead, seen | {pt}))
             else:
                 out.append((pt, pk, plg))
         return out
