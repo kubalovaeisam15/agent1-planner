@@ -553,6 +553,79 @@ class Build:
             self.rows[i]["dur"] = value
             self.rows[i]["src"] = source
 
+    @staticmethod
+    def _live_preds(key: str, dead: dict[str, list[tuple[str, str, int]]],
+                    seen: set[str] | None = None) -> list[tuple[str, str, int]]:
+        """Предшественники удаляемой строки, разрешённые до живых строк.
+
+        Если предшественник удаляемой строки сам удаляется, спуск продолжается
+        вглубь: иначе цепочка «живой → удаляемая → удаляемая → потребитель»
+        оставила бы потребителя вовсе без связей.
+        """
+        seen = seen if seen is not None else set()
+        out: list[tuple[str, str, int]] = []
+        for pt, pk, plg in dead.get(key, []):
+            if pt in seen:
+                continue
+            seen.add(pt)
+            if pt in dead:
+                out.extend(Build._live_preds(pt, dead, seen))
+            else:
+                out.append((pt, pk, plg))
+        return out
+
+    def drop_rows(self, roots: list[int], reason: str) -> int:
+        """Удаляет строки `roots` вместе с потомками и переписывает внешние связи.
+
+        CLAUDE.md §12 запрещает молчаливое отбрасывание связей. finalize()
+        отбросил бы ссылки на удалённые строки без следа, поэтому решение
+        принимается здесь и записывается в «Обоснование»:
+          · у потребителя остаются другие предшественники → битая связь снимается;
+          · других предшественников нет → потребитель наследует предшественников
+            удаляемой строки (транзитивно, до первой живой).
+        """
+        doomed: set[int] = set()
+        for i in roots:
+            doomed.add(i)
+            doomed.update(self.subtree(i))
+        if not doomed:
+            return 0
+
+        dead = {self.rows[i]["key"]: list(self.rows[i]["links"]) for i in doomed}
+        cut: list[str] = []
+        rewired: list[str] = []
+        for i, r in enumerate(self.rows):
+            if i in doomed:
+                continue
+            lost = [ln for ln in r["links"] if ln[0] in dead]
+            if not lost:
+                continue
+            kept = [ln for ln in r["links"] if ln[0] not in dead]
+            if kept:
+                r["links"] = kept
+                cut.append(r["name"])
+            else:
+                inherited: list[tuple[str, str, int]] = []
+                for t, _, _ in lost:
+                    for ln in self._live_preds(t, dead):
+                        if ln not in inherited:
+                            inherited.append(ln)
+                r["links"] = inherited
+                rewired.append(r["name"])
+
+        for i in sorted(doomed, reverse=True):
+            del self.rows[i]
+
+        self.why(f"Удаление блока ({reason})",
+                 f"{len(doomed)} строк снято",
+                 f"{reason} · CLAUDE.md §12", "средняя",
+                 f"Связей снято у сохранённых задач: {len(cut)}"
+                 + (f" — {'; '.join(cut[:6])}" if cut else "")
+                 + f". Связей переопределено на предшественников удалённых: {len(rewired)}"
+                 + (f" — {'; '.join(rewired[:6])}" if rewired else "")
+                 + ". Ни одна зависимость не отброшена молча.")
+        return len(doomed)
+
     def apply_standards(self) -> None:
         zc = self.p["нулевой_цикл"]
         wall = zc["ограждение_котлована"].lower()

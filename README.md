@@ -33,7 +33,7 @@ tools/
 
 ## Требования
 
-- Python 3.12+, `openpyxl` (`pip install openpyxl`)
+- Python 3.12+, `openpyxl`, `pytest` (`pip install openpyxl pytest`)
 - Git
 
 ## Команды
@@ -50,6 +50,9 @@ python tools\validate_grp.py out\ГРП_эталон.xlsx
 
 # сверка с эталоном по критериям приёмки §10
 python tools\check_regression.py out\ГРП_эталон.xlsx
+
+# юнит-тесты генератора
+python -m pytest tests -q
 ```
 
 ## Что изменил шаблон v2
