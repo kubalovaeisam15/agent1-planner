@@ -258,6 +258,7 @@ def validate(tasks: list[dict]) -> int:
         "завершены отделочные работы квартир",
         "передача квартир с отделкой",
         "переданы квартиры с отделкой",
+        "отделка квартиры",
     )
     lowered = [t["Название задачи"].lower() for t in tasks]
     present = [m for m in FLAT_FIT_MARKERS if any(m in nm for nm in lowered)]
