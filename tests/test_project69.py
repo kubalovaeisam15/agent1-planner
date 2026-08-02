@@ -94,13 +94,13 @@ def test_koefficient_K_raven_7_pri_69_etazhah(built):
 
 def test_kladka_privyazana_k_vekhe_6_etazha_a_ne_k_69(built):
     b, _ = built
-    assert b.one("К1. 6 этаж Монолит") is not None, \
+    assert b.one("6 этаж Монолит", "К1") is not None, \
         "веха min(6, N) = 6 этаж отсутствует — перепривязка BND-KLD-001 невозможна"
 
 
 def test_vis_privyazany_k_vekhe_15_etazha(built):
     b, _ = built
-    assert b.one("К1. 15 этаж Монолит") is not None, \
+    assert b.one("15 этаж Монолит", "К1") is not None, \
         "веха min(15, N) = 15 этаж отсутствует — перепривязка BND-VIS-001 невозможна"
 
 

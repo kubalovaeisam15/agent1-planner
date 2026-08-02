@@ -135,20 +135,13 @@ class Build:
         return out
 
     def find(self, name: str, prefix: str | None = None, exact: bool = True) -> list[int]:
-        """Поиск строк по наименованию (и, при необходимости, префиксу объекта).
-
-        Без явного `prefix` строка сверяется и с «голым» названием (без
-        префикса объекта), и с названием целиком — вызывающий код вправе
-        передать имя так, как оно выглядит в выдаче, например
-        «К1. 6 этаж Монолит», не выделяя префикс отдельным аргументом.
-        """
+        """Поиск строк по наименованию (и, при необходимости, префиксу объекта)."""
         out = []
         for i, r in enumerate(self.rows):
             pref, bare = strip_prefix(r["name"])
             if prefix is not None and pref != prefix:
                 continue
-            candidates = (bare,) if prefix is not None else (bare, r["name"])
-            if any((c == name) if exact else c.startswith(name) for c in candidates):
+            if (bare == name) if exact else bare.startswith(name):
                 out.append(i)
         return out
 
