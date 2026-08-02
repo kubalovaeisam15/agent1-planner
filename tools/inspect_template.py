@@ -5,6 +5,11 @@ from pathlib import Path
 
 import openpyxl
 
+# Консоль Windows может быть в cp1251: не даём выводу падать на символах,
+# которых нет в её кодировке (стрелки, типографика).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "instructions" / "Шаблон_ГРП.xlsx"
 

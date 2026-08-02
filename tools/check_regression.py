@@ -3,8 +3,11 @@
 
     python tools/check_regression.py out/ГРП_эталон.xlsx
 
-Сверяет выдачу с tests/etalon_expected.md §1: даты РС и РВЭ и длительности
-двух фаз по отдельности. Сквозная длительность не проверяется — DEC-19.
+Сверяет выдачу с tests/etalon_expected.md §1–§2: даты РС и РВЭ, длительности
+двух фаз по отдельности и покорпусные ориентиры. Сквозная длительность не
+проверяется — DEC-19.
+
+Адресация вех — по наименованию: колонки СДР в шаблоне v2 нет (typGRP.md §2).
 
 Код возврата: 0 — все жёсткие критерии в допуске; 1 — есть выход за ±14 дн.
 """
@@ -16,24 +19,45 @@ from pathlib import Path
 
 import openpyxl
 
+# Консоль Windows может быть в cp1251: не даём выводу падать на символах,
+# которых нет в её кодировке (стрелки, типографика).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
 TOL = 14  # ±2 недели — CLAUDE.md §10
 
-# Эталон — tests/etalon_expected.md §1 и §2. Правка «под результат» запрещена.
+# Эталон — tests/etalon_expected.md. Правка «под результат» запрещена.
 HARD = {
-    "РС": ("7.5", "02.04.2024"),
-    "РВЭ": ("1.2.3.1.7", "22.06.2026"),
+    "РС": ("Разрешение на строительство (РС) получено", "02.04.2024"),
+    "РВЭ": ("Получено РВЭ", "31.12.2026"),
 }
 PHASES = {
-    "Фаза A (МЗ → РС)": ("1.1.1.4", "7.5", 447),
-    "Фаза РС → РВЭ": ("7.5", "1.2.3.1.7", 811),
+    "Фаза A (МЗ → РС)": ("Маркетинговое задание утверждено",
+                         "Разрешение на строительство (РС) получено", 447),
+    "Фаза РС → РВЭ": ("Разрешение на строительство (РС) получено",
+                      "Получено РВЭ", 1003),
 }
+# Ориентиры второго уровня — etalon_expected.md §2. Покорпусные вехи проверяют
+# главное: одно правило должно давать РАЗНЫЕ числа для К1 (26 эт.) и К2 (55 эт.).
 LANDMARKS = {
-    "ЯКОРЬ (кровля/парапет)": ("11.4.2.1.1.27", "19.04.2025"),
-    "TC_perm": ("11.4.2.1.8", "16.08.2025"),
-    "Пуск тепла К1": ("11.4.2.2.9", "20.10.2025"),
-    "Завершено свайное поле": ("1.2.2.1.4", "04.07.2024"),
-    "Получен ЗОС": ("1.2.3.1.5", "15.06.2026"),
+    "Завершено свайное поле": ("Завершено свайное поле", "04.07.2024"),
+    "ЯКОРЬ К1 (кровля/парапет)": ("К1. Кровля/Парапет Монолит", "04.05.2025"),
+    "ЯКОРЬ К2 (кровля/парапет)": ("К2. Кровля/Парапет Монолит", "25.10.2025"),
+    "TC_perm К1": ("К1. Закрыт тепловой контур по корпусу", "23.07.2025"),
+    "TC_perm К2": ("К2. Закрыт тепловой контур по корпусу", "03.03.2026"),
+    "Пуск тепла К1": ("К1. Пуск тепла корпус", "04.11.2025"),
+    "Пуск тепла К2": ("К2. Пуск тепла корпус", "20.12.2025"),
+    "Пуск тепла в паркинге": ("П1. Пуск тепла в паркинге", "06.10.2025"),
+    "Финиш отделки К1": ("К1. По договору Вестибюль", "08.05.2026"),
+    "Финиш отделки К2": ("К2. По договору Вестибюль", "20.10.2026"),
+    "Получен ЗОС": ("Получен ЗОС", "26.12.2026"),
+    "Переданы квартиры с отделкой": ("Переданы квартиры с отделкой", "01.10.2027"),
+}
+# Длительности, выводимые правилом, а не копируемые из шаблона (etalon_expected §2.2).
+DURATIONS = {
+    "Монолит К1 (26 эт.)": ("К1. Монтаж монолитных конструкций выше отм. 0.000", 195),
+    "Монолит К2 (55 эт.)": ("К2. Монтаж монолитных конструкций выше отм. 0.000", 369),
 }
 
 
@@ -46,21 +70,25 @@ def load(path: Path) -> dict[str, dict]:
     ws = wb[wb.sheetnames[0]]
     rows = ws.iter_rows(values_only=True)
     header = [str(c).strip() if c else "" for c in next(rows)]
-    out = {}
+    out: dict[str, dict] = {}
     for raw in rows:
         rec = {h: ("" if v is None else str(v).strip()) for h, v in zip(header, raw)}
-        if rec.get("СДР"):
-            out[rec["СДР"]] = rec
-        if rec.get("Ид.") == "1":
-            pass
+        name = rec.get("Название задачи", "")
+        if name and name not in out:      # первое вхождение — сама веха, не её копия
+            out[name] = rec
     return out
 
 
-def finish_of(tasks: dict, sdr: str) -> str | None:
-    r = tasks.get(sdr)
-    if not r:
+def finish_of(tasks: dict, name: str) -> str | None:
+    r = tasks.get(name)
+    return (r.get("Окончание") or None) if r else None
+
+
+def span_of(tasks: dict, name: str) -> int | None:
+    r = tasks.get(name)
+    if not r or not r.get("Начало") or not r.get("Окончание"):
         return None
-    return r.get("Окончание") or None
+    return (d(r["Окончание"]) - d(r["Начало"])).days
 
 
 def main() -> int:
@@ -76,10 +104,10 @@ def main() -> int:
     failed = 0
 
     print("-- Жёсткие критерии --")
-    for name, (sdr, expected) in HARD.items():
-        got = finish_of(tasks, sdr)
+    for name, (task, expected) in HARD.items():
+        got = finish_of(tasks, task)
         if not got:
-            print(f"  НЕТ ДАННЫХ {name}: задача {sdr} отсутствует или без даты")
+            print(f"  НЕТ ДАННЫХ {name}: «{task}» отсутствует или без даты")
             failed += 1
             continue
         delta = (d(got) - d(expected)).days
@@ -89,8 +117,8 @@ def main() -> int:
               f"({delta:+d} дн)")
 
     print("\n-- Длительности фаз (DEC-19, пофазно) --")
-    for name, (a_sdr, b_sdr, expected) in PHASES.items():
-        a, b = finish_of(tasks, a_sdr), finish_of(tasks, b_sdr)
+    for name, (a_task, b_task, expected) in PHASES.items():
+        a, b = finish_of(tasks, a_task), finish_of(tasks, b_task)
         if not a or not b:
             print(f"  НЕТ ДАННЫХ {name}")
             failed += 1
@@ -102,9 +130,18 @@ def main() -> int:
         print(f"  {'OK  ' if ok else 'МИМО'} {name}: {got} дн против эталона {expected} дн "
               f"({delta:+d} дн)")
 
+    print("\n-- Длительности, выведенные правилом (не скопированные) --")
+    for name, (task, expected) in DURATIONS.items():
+        got = span_of(tasks, task)
+        if got is None:
+            print(f"  —    {name}: нет данных")
+            continue
+        mark = "OK  " if got == expected else "!   "
+        print(f"  {mark} {name}: {got} дн против {expected} дн ({got - expected:+d} дн)")
+
     print("\n-- Ориентиры второго уровня (не критерии приёмки) --")
-    for name, (sdr, expected) in LANDMARKS.items():
-        got = finish_of(tasks, sdr)
+    for name, (task, expected) in LANDMARKS.items():
+        got = finish_of(tasks, task)
         if not got:
             print(f"  —    {name}: нет данных")
             continue

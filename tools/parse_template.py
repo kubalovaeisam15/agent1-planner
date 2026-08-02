@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Разбор Шаблон_ГРП.xlsx в машинный вид + сверка статистики typGRP.md §3.
+"""Разбор «Шаблон_ГРП v2.xlsx» в машинный вид + сверка статистики typGRP.md §3.
 
 Выход:
-  tests/template_parsed.json  — 1 545 задач с вычисленным «Уровнем структуры»
+  tests/template_parsed.json  — 1 672 задачи в порядке обхода дерева
   печать отчёта сверки в stdout
 
-Уровень структуры считается по правилу typGRP.md §2.2: число сегментов кода СДР.
-В самом шаблоне этой колонки нет — она обязательна только в выдаче агента (§2, §3).
+Отличие от версии для шаблона v1: колонки «СДР» больше нет, «Уровень структуры»
+подаётся самим шаблоном (typGRP.md §2.2) и не вычисляется. Добавлены колонки
+«Вид работ» и «Код классификатора» — заготовка под справочник МДМ, в шаблоне пустые.
 """
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections import Counter
 from datetime import datetime
@@ -18,28 +20,30 @@ from pathlib import Path
 
 import openpyxl
 
+# Консоль Windows может быть в cp1251: не даём выводу падать на символах,
+# которых нет в её кодировке (стрелки, типографика).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "instructions" / "Шаблон_ГРП.xlsx"
+SRC = ROOT / "instructions" / "Шаблон_ГРП v2.xlsx"
 DST = ROOT / "tests" / "template_parsed.json"
 
 COLUMNS = [
-    "СДР", "Ид.", "Название задачи", "% завершения", "Длительность",
+    "Вид работ", "Код классификатора", "Уровень структуры", "Ид.",
+    "Название задачи", "% завершения", "Длительность",
     "Начало", "Окончание", "Предшественники", "Последователи", "комментарий",
 ]
 
 # Заявлено в typGRP.md §3 — сверяем, а не доверяем.
 DECLARED = {
-    "всего задач": 1545,
-    "вех": 292,
-    "со связями": 1140,
-    "с комментариями": 243,
-    "уровни": {1: 19, 2: 84, 3: 284, 4: 655, 5: 317, 6: 90, 7: 58, 8: 38},
+    "всего задач": 1673,
+    "вех": 293,
+    "со связями": 1220,
+    "с комментариями": 260,
+    "суммарных строк": 420,
+    "уровни": {1: 18, 2: 84, 3: 280, 4: 636, 5: 336, 6: 174, 7: 88, 8: 57},
 }
-
-
-def outline_level(sdr: str) -> int:
-    """typGRP.md §2.2: уровень = число сегментов кода СДР."""
-    return sdr.count(".") + 1
 
 
 def cell(value) -> str:
@@ -63,27 +67,38 @@ def load() -> list[dict]:
     tasks = []
     for raw in rows:
         rec = {name: cell(v) for name, v in zip(COLUMNS, raw)}
-        if not rec["СДР"] and not rec["Название задачи"]:
+        if not rec["Ид."] and not rec["Название задачи"]:
             continue
-        rec["Уровень структуры"] = outline_level(rec["СДР"])
+        rec["Уровень структуры"] = int(rec["Уровень структуры"])
         rec["Название задачи"] = rec["Название задачи"].strip()
         tasks.append(rec)
     return tasks
 
 
+def summary_ids(tasks: list[dict]) -> set[str]:
+    """Суммарная строка — та, за которой непосредственно следует строка большего уровня."""
+    out = set()
+    for i, t in enumerate(tasks[:-1]):
+        if tasks[i + 1]["Уровень структуры"] > t["Уровень структуры"]:
+            out.add(t["Ид."])
+    return out
+
+
 def report(tasks: list[dict]) -> int:
     levels = Counter(t["Уровень структуры"] for t in tasks)
+    summ = summary_ids(tasks)
     facts = {
         "всего задач": len(tasks),
         "вех": sum(1 for t in tasks if t["Длительность"].startswith("0 дн")),
         "со связями": sum(1 for t in tasks if t["Предшественники"]),
         "с комментариями": sum(1 for t in tasks if t["комментарий"]),
+        "суммарных строк": len(summ),
         "уровни": dict(sorted(levels.items())),
     }
 
     print("=== Сверка со статистикой typGRP.md §3 ===")
     bad = 0
-    for key in ("всего задач", "вех", "со связями", "с комментариями"):
+    for key in ("всего задач", "вех", "со связями", "с комментариями", "суммарных строк"):
         ok = facts[key] == DECLARED[key]
         bad += 0 if ok else 1
         print(f"{'OK  ' if ok else 'РАСХ'} {key}: факт {facts[key]}, заявлено {DECLARED[key]}")
@@ -100,32 +115,56 @@ def report(tasks: list[dict]) -> int:
     print(f"{'OK  ' if first == 1 else 'РАСХ'} уровень первой строки: {first}")
 
     jumps = [
-        (i, tasks[i - 1]["СДР"], tasks[i]["СДР"])
+        (i, tasks[i - 1]["Название задачи"], tasks[i]["Название задачи"])
         for i in range(1, len(tasks))
         if tasks[i]["Уровень структуры"] - tasks[i - 1]["Уровень структуры"] > 1
     ]
     print(f"{'OK  ' if not jumps else 'РАСХ'} скачков уровня >1: {len(jumps)}")
     for i, prev, cur in jumps[:10]:
-        print(f"     строка {i + 2}: {prev} -> {cur}")
+        print(f"     строка {i + 2}: {prev[:40]} -> {cur[:40]}")
 
-    ids = [t["Ид."] for t in tasks]
-    seq = ids == [str(i) for i in range(len(tasks))]
-    print(f"{'OK  ' if seq else 'РАСХ'} Ид. сквозной от 0 без разрывов")
+    ids = [int(t["Ид."]) for t in tasks]
+    gaps = sorted(set(range(1, max(ids) + 1)) - set(ids))
+    print(f"{'OK  ' if not gaps else 'РАСХ'} Ид. сквозной от 1 без разрывов; "
+          f"пропущено {len(gaps)}: {gaps}")
+    print("     (typGRP.md §13 расх. 1: нумерация шаблона в выдачу не переносится)")
 
-    has_children = {t["СДР"] for t in tasks}
-    parents = set()
-    for t in tasks:
-        sdr = t["СДР"]
-        if "." in sdr:
-            parent = sdr.rsplit(".", 1)[0]
-            if parent in has_children:
-                parents.add(parent)
-    dirty = [
-        t["СДР"] for t in tasks
-        if t["СДР"] in parents and (t["Длительность"] or t["Предшественники"])
+    known = set(t["Ид."] for t in tasks)
+    broken = [
+        (t["Ид."], t["Название задачи"][:45], p)
+        for t in tasks
+        for p in (x.strip() for x in t["Предшественники"].split(";") if x.strip())
+        if (m := re.match(r"^(\d+)", p)) and m.group(1) not in known
     ]
-    print(f"{'ИНФО'} суммарных строк с собственной длительностью/связями: {len(dirty)}")
-    print("     (в шаблоне это норма; в выдаче агента такие строки должны быть пусты — §2.2 п.4)")
+    print(f"{'OK  ' if not broken else 'РАСХ'} битых ссылок в «Предшественниках»: {len(broken)}")
+    for b in broken:
+        print(f"     Ид. {b[0]} «{b[1]}» -> {b[2]}")
+    print("     (typGRP.md §13 расх. 2: восстанавливаются на шаги блока «Ограждение территории»)")
+
+    to_summary = sum(
+        1
+        for t in tasks
+        for p in (x.strip() for x in t["Предшественники"].split(";") if x.strip())
+        if (m := re.match(r"^(\d+)", p)) and m.group(1) in summ
+    )
+    print(f"ИНФО связей на суммарные строки: {to_summary} (§13 расх. 6 — сохраняются как есть)")
+
+    succ_with_code = sum(
+        1 for t in tasks
+        if t["Последователи"] and re.search(r"\d+(ОН|НН|ОО|НО)|[+-]\d+\s*дн", t["Последователи"])
+    )
+    print(f"ИНФО «Последователей» с кодом связи и лагом: {succ_with_code} (§13 расх. 8 — код отбрасывается)")
+
+    dirty = [t["Ид."] for t in tasks if t["Ид."] in summ and (t["Длительность"] or t["% завершения"])]
+    print(f"ИНФО суммарных строк с собственной длительностью/процентом: {len(dirty)}")
+    print("     (в шаблоне это норма; в выдаче агента такие поля пусты — §2.2 п. 4)")
+
+    mdm = sum(1 for t in tasks if t["Вид работ"] or t["Код классификатора"])
+    print(f"ИНФО строк с заполненным МДМ («Вид работ» / «Код классификатора»): {mdm}")
+    print("     (§13 расх. 14: пока пусты, выводятся пустыми со строкой в «Допущения»)")
+
+    lat = sum(1 for t in tasks if re.search(r"\d+(FS|SS|FF|SF)", t["Предшественники"]))
+    print(f"{'OK  ' if not lat else 'РАСХ'} латинских кодов связей: {lat} (допустимы только ОН/НН/ОО/НО)")
 
     return bad
 

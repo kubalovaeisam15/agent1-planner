@@ -3,11 +3,14 @@
 
 Использование:
     python tools/validate_grp.py <файл.xlsx>
-    python tools/validate_grp.py tests/template_parsed.json     # самопроверка на эталоне
+    python tools/validate_grp.py tests/template_parsed.json     # самопроверка на шаблоне
 
 Проверяет только то, что проверяется формально. Пункты чек-листа, требующие
 предметного суждения (сезонный гейт, здравый смысл критического пути, оценка
 уверенности), остаются за планировщиком и здесь НЕ подменяются.
+
+Формат — шаблон v2: 12 колонок, колонки СДР нет. Иерархия читается только из
+«Уровня структуры»; адрес строки в сообщениях — «Ид. + наименование».
 
 Код возврата: 0 — нарушений уровня ОШИБКА нет; 1 — есть.
 """
@@ -16,9 +19,13 @@ from __future__ import annotations
 import json
 import re
 import sys
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+
+# Консоль Windows может быть в cp1251: не даём выводу падать на символах,
+# которых нет в её кодировке (стрелки, типографика).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,23 +33,25 @@ LATIN_LINK = re.compile(r"\d+\s*(FS|SS|FF|SF)\b", re.IGNORECASE)
 LINK_RE = re.compile(r"^(\d+)\s*([А-Я]{2})?\s*([+-]\s*\d+)?")
 VAGUE = re.compile(r"(≥|≤|не\s+менее|не\s+более|более|около|примерно|~)")
 DUR_RE = re.compile(r"^\d+([.,]\d+)?\s*(дн|день|дня|дней)\.?\??$", re.IGNORECASE)
+SUCC_DIRTY = re.compile(r"(ОН|НН|ОО|НО)|дн")
 
 # CLAUDE.md §9 «Все обязательные вехи присутствуют»
 REQUIRED_MILESTONES = {
     "АК (архитектурный конкурс)": ("архитектурн", "конкурс"),
     "ГПЗУ": ("гпзу",),
     "РС": ("разрешени", "строительств"),
-    "Старт СМР": ("старт", "смр"),
     "Завершение монолита": ("монолит",),
     "Замыкание теплового контура": ("теплов", "контур"),
     "Пуск тепла": ("пуск", "тепл"),
     "ЗОС": ("зос",),
     "РВЭ": ("рвэ",),
-    "Передача": ("передач",),
+    "Передача": ("передан",),
 }
 
-COLUMNS = ["СДР", "Ид.", "Название задачи", "% завершения", "Длительность",
-           "Начало", "Окончание", "Предшественники", "Последователи", "комментарий"]
+# typGRP.md §2 — формат строки шаблона v2
+COLUMNS = ["Вид работ", "Код классификатора", "Уровень структуры", "Ид.",
+           "Название задачи", "% завершения", "Длительность", "Начало", "Окончание",
+           "Предшественники", "Последователи", "комментарий"]
 
 
 class Report:
@@ -66,7 +75,8 @@ class Report:
             print(f"  ВНИМАНИЕ {n}")
         for n in self.errors:
             print(f"  ОШИБКА  {n}")
-        print(f"\nИтог: OK {len(self.oks)} · внимание {len(self.warns)} · ошибок {len(self.errors)}")
+        print(f"\nИтог: OK {len(self.oks)} · внимание {len(self.warns)} · "
+              f"ошибок {len(self.errors)}")
         return 1 if self.errors else 0
 
 
@@ -82,7 +92,8 @@ def cell(v) -> str:
 
 def load(path: Path) -> list[dict]:
     if path.suffix.lower() == ".json":
-        return json.loads(path.read_text(encoding="utf-8"))
+        return [{k: (v if isinstance(v, str) else str(v)) for k, v in r.items()}
+                for r in json.loads(path.read_text(encoding="utf-8"))]
 
     import openpyxl
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
@@ -92,14 +103,15 @@ def load(path: Path) -> list[dict]:
     tasks = []
     for raw in rows:
         rec = {h: cell(v) for h, v in zip(header, raw)}
-        if not rec.get("СДР") and not rec.get("Название задачи"):
+        if not rec.get("Название задачи"):
             continue
         tasks.append(rec)
     return tasks
 
 
-def level_of(sdr: str) -> int:
-    return sdr.count(".") + 1
+def label(t: dict) -> str:
+    """Адрес строки для сообщений. СДР больше нет — «Ид. + наименование»."""
+    return f"{t.get('Ид.', '?')} «{t.get('Название задачи', '')[:38]}»"
 
 
 def validate(tasks: list[dict]) -> int:
@@ -107,68 +119,52 @@ def validate(tasks: list[dict]) -> int:
     n = len(tasks)
     print(f"Задач: {n}\n")
 
-    # --- Колонка «Уровень структуры» -------------------------------------
-    has_level_col = "Уровень структуры" in tasks[0]
-    r.check(has_level_col, "колонка «Уровень структуры» присутствует",
-            "в выдаче она обязательна — typGRP.md §2.2", warn_only=True)
+    # --- Формат строки (typGRP.md §2) -------------------------------------
+    missing_cols = [c for c in COLUMNS if c not in tasks[0]]
+    r.check(not missing_cols, "выведены все 12 колонок формата v2", f"нет: {missing_cols}")
+    if "Уровень структуры" not in tasks[0]:
+        r.errors.append("колонка «Уровень структуры» отсутствует — иерархию восстановить "
+                        "не из чего (СДР в шаблоне v2 нет, typGRP.md §2.2)")
+        return r.dump()
     for t in tasks:
-        t["_lvl"] = int(t["Уровень структуры"]) if has_level_col and t.get("Уровень структуры") \
-            else level_of(t["СДР"])
+        t["_lvl"] = int(float(t["Уровень структуры"])) if t.get("Уровень структуры") else 0
 
-    mismatch = [t["СДР"] for t in tasks if t["_lvl"] != level_of(t["СДР"])]
-    r.check(not mismatch, "уровень структуры = числу сегментов СДР",
-            f"{len(mismatch)} расхождений, напр. {mismatch[:5]}")
+    if any(t.get("Вид работ") or t.get("Код классификатора") for t in tasks):
+        r.warns.append("справочно: часть строк несёт коды МДМ — справочник поступил, "
+                       "проверьте соответствие классификатору")
+    else:
+        r.oks.append("колонки МДМ пусты — справочник не поступил (typGRP.md §13 расх. 14)")
 
     # --- Иерархия (typGRP.md §2.2) ---------------------------------------
     r.check(tasks[0]["_lvl"] == 1, "уровень первой строки = 1", f"фактически {tasks[0]['_lvl']}")
 
-    jumps = [(i, tasks[i - 1]["СДР"], tasks[i]["СДР"])
-             for i in range(1, n) if tasks[i]["_lvl"] - tasks[i - 1]["_lvl"] > 1]
+    jumps = [(i + 2, label(tasks[i])) for i in range(1, n)
+             if tasks[i]["_lvl"] - tasks[i - 1]["_lvl"] > 1]
     r.check(not jumps, "уровень не растёт больше чем на 1",
             f"{len(jumps)} скачков, напр. {jumps[:3]}")
 
-    # порядок обхода дерева: родитель непосредственно выше
-    seen: dict[str, int] = {}
-    order_bad = []
-    for i, t in enumerate(tasks):
-        sdr = t["СДР"]
-        seen[sdr] = i
-        if "." in sdr:
-            parent = sdr.rsplit(".", 1)[0]
-            if parent not in seen:
-                order_bad.append(sdr)
-    r.check(not order_bad, "строки идут в порядке обхода дерева",
-            f"{len(order_bad)} потомков раньше родителя, напр. {order_bad[:5]}")
+    bad_lvl = [label(t) for t in tasks if t["_lvl"] < 1]
+    r.check(not bad_lvl, "уровень структуры заполнен у всех строк",
+            f"{len(bad_lvl)} пустых, напр. {bad_lvl[:5]}")
+
+    # Суммарная строка — та, за которой следует строка большего уровня.
+    summary_idx = {i for i in range(n - 1) if tasks[i + 1]["_lvl"] > tasks[i]["_lvl"]}
 
     # --- Суммарные строки -------------------------------------------------
-    children = defaultdict(list)
-    all_sdr = {t["СДР"] for t in tasks}
-    for t in tasks:
-        if "." in t["СДР"]:
-            p = t["СДР"].rsplit(".", 1)[0]
-            if p in all_sdr:
-                children[p].append(t)
-    summaries = {s for s in children}
-
-    # §2.2 п.4 в редакции с 31.07.2026: у суммарных строк пусты ДЛИТЕЛЬНОСТЬ и
-    # ПРЕДШЕСТВЕННИКИ (именно они ломают импорт). Даты выводятся — решение
-    # владельца, они свёрнуты из потомков и нужны для чтения выгрузки.
-    dirty = [t["СДР"] for t in tasks if t["СДР"] in summaries and (
-        t.get("Длительность") or t.get("Предшественники"))]
-    r.check(not dirty, "у суммарных строк пусты длительность и предшественники",
+    # §2.2 п.4: у суммарных строк пусты ДЛИТЕЛЬНОСТЬ и % ЗАВЕРШЕНИЯ — именно они
+    # ломают импорт. Даты выводятся (DEC-25), связи сохраняются (DEC-26).
+    dirty = [label(tasks[i]) for i in summary_idx
+             if tasks[i].get("Длительность") or tasks[i].get("% завершения")]
+    r.check(not dirty, "у суммарных строк пусты длительность и % завершения",
             f"{len(dirty)} нарушений (§2.2 п.4), напр. {dirty[:5]}")
 
-    undated = [t["СДР"] for t in tasks if t["СДР"] in summaries
-               and not (t.get("Начало") and t.get("Окончание"))]
-    r.check(not undated, "у суммарных строк проставлены даты",
+    undated = [label(tasks[i]) for i in summary_idx
+               if not (tasks[i].get("Начало") and tasks[i].get("Окончание"))]
+    r.check(not undated, "у суммарных строк проставлены даты (DEC-25)",
             f"{len(undated)} без дат, напр. {undated[:5]}", warn_only=True)
 
-    orphan_parents = [s for s in summaries if s not in all_sdr]
-    r.check(not orphan_parents, "все промежуточные суммарные строки присутствуют",
-            f"отсутствуют: {orphan_parents[:5]}")
-
     # --- Ид. ---------------------------------------------------------------
-    ids = [t["Ид."] for t in tasks]
+    ids = [t.get("Ид.", "") for t in tasks]
     nums = [int(x) for x in ids if x.isdigit()]
     r.check(len(nums) == n, "все Ид. заполнены и числовые", f"{n - len(nums)} пустых/нечисловых")
     if len(nums) == n:
@@ -177,27 +173,30 @@ def validate(tasks: list[dict]) -> int:
                 f"{len(gaps)} пропущено: {gaps[:12]}")
         r.check(len(set(nums)) == len(nums), "Ид. уникальны",
                 f"{len(nums) - len(set(nums))} дубликатов")
+        r.check(nums == list(range(1, n + 1)), "Ид. совпадает с номером строки",
+                "нумерация сдвинута — связи после импорта укажут на чужие задачи")
 
     present_ids = set(nums)
 
     # --- Связи -------------------------------------------------------------
-    latin = [t["СДР"] for t in tasks if LATIN_LINK.search(t.get("Предшественники", ""))]
+    latin = [label(t) for t in tasks if LATIN_LINK.search(t.get("Предшественники", ""))]
     r.check(not latin, "нотация связей русская (ОН · НН · ОО · НО)",
             f"латиница в {len(latin)} строках, напр. {latin[:5]}")
 
-    vague = [t["СДР"] for t in tasks if VAGUE.search(t.get("Предшественники", ""))]
+    vague = [label(t) for t in tasks if VAGUE.search(t.get("Предшественники", ""))]
     r.check(not vague, "лаги численные, без формулировок «не менее»",
             f"{len(vague)} строк, напр. {vague[:5]}")
 
+    # DEC-27: «Последователи» — только Ид. через «;», без кода связи и лага.
+    succ_dirty = [label(t) for t in tasks if SUCC_DIRTY.search(t.get("Последователи", ""))]
+    r.check(not succ_dirty, "«Последователи» — только Ид., без кода связи и лага (DEC-27)",
+            f"{len(succ_dirty)} строк, напр. {succ_dirty[:5]}")
+
     dangling, to_summary = [], []
-    leaf_sdr = all_sdr - summaries
-    id_to_sdr = {int(t["Ид."]): t["СДР"] for t in tasks if t["Ид."].isdigit()}
+    idx_by_id = {int(t["Ид."]): i for i, t in enumerate(tasks) if t.get("Ид.", "").isdigit()}
     has_successor = set()
     for t in tasks:
-        p = t.get("Предшественники", "")
-        if not p:
-            continue
-        for part in (x.strip() for x in p.split(";")):
+        for part in (x.strip() for x in t.get("Предшественники", "").split(";")):
             if not part:
                 continue
             m = LINK_RE.match(part)
@@ -205,39 +204,38 @@ def validate(tasks: list[dict]) -> int:
                 continue
             pid = int(m.group(1))
             if pid not in present_ids:
-                dangling.append((t["СДР"], part))
+                dangling.append((label(t), part))
             else:
                 has_successor.add(pid)
-                if id_to_sdr.get(pid) in summaries:
-                    to_summary.append((t["СДР"], part))
+                if idx_by_id.get(pid) in summary_idx:
+                    to_summary.append((label(t), part))
 
     r.check(not dangling, "все связи ведут на существующие Ид.",
             f"{len(dangling)} битых, напр. {dangling[:5]}")
-    # Связь на суммарную строку — норма, а не нарушение: решение владельца
-    # 31.07.2026 (typGRP.md §2.2 п.5, §13 расх. 14). Выводится справочно.
+    # Связь на суммарную строку — норма, а не нарушение (typGRP.md §2.2, DEC-26).
     if to_summary:
         r.warns.append(f"справочно: {len(to_summary)} связей ведут на суммарные строки — "
-                       f"это норма (typGRP.md §2.2 п.5), напр. {to_summary[:4]}")
+                       f"это норма (typGRP.md §2.2), напр. {to_summary[:3]}")
     else:
         r.oks.append("связей на суммарные строки нет")
 
-    leaves = [t for t in tasks if t["СДР"] in leaf_sdr]
-    no_pred = [t["СДР"] for t in leaves if not t.get("Предшественники")]
-    no_succ = [t["СДР"] for t in leaves
-               if t["Ид."].isdigit() and int(t["Ид."]) not in has_successor
+    leaves = [(i, t) for i, t in enumerate(tasks) if i not in summary_idx]
+    no_pred = [label(t) for _, t in leaves if not t.get("Предшественники")]
+    no_succ = [label(t) for _, t in leaves
+               if t.get("Ид.", "").isdigit() and int(t["Ид."]) not in has_successor
                and not t.get("Последователи")]
     r.check(len(no_pred) <= 1, "нет задач-листьев без предшественников (кроме стартовой)",
-            f"{len(no_pred)} шт., напр. {no_pred[:8]}", warn_only=True)
+            f"{len(no_pred)} шт., напр. {no_pred[:6]}", warn_only=True)
     r.check(len(no_succ) <= 1, "нет задач-листьев без последователей (кроме финальной)",
-            f"{len(no_succ)} шт., напр. {no_succ[:8]}", warn_only=True)
+            f"{len(no_succ)} шт., напр. {no_succ[:6]}", warn_only=True)
 
     # --- Длительности ------------------------------------------------------
-    bad_dur = [(t["СДР"], t["Длительность"]) for t in leaves
+    bad_dur = [(label(t), t["Длительность"]) for _, t in leaves
                if t.get("Длительность") and not DUR_RE.match(t["Длительность"])]
     r.check(not bad_dur, "длительности в формате «N дней»",
             f"{len(bad_dur)} нарушений, напр. {bad_dur[:5]}")
 
-    prelim = [t["СДР"] for t in tasks if t.get("Длительность", "").endswith("?")]
+    prelim = [label(t) for t in tasks if t.get("Длительность", "").endswith("?")]
     r.check(not prelim, "нет предварительных оценок (суффикс «?»)",
             f"{len(prelim)} шт., напр. {prelim[:5]}", warn_only=True)
 
