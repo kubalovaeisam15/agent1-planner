@@ -122,6 +122,25 @@ def test_kriticheskiy_put_nepreryven(built):
     assert crit, "критический путь пуст"
 
 
+def test_schetchik_kriticheskogo_puti_soglasovan_s_chek_listom(built):
+    """Суммарная строка не является задачей: у неё нет ни «Длительности», ни
+    «% завершения» (DEC-25, CLAUDE.md §3 · §9). Счётчик критического пути,
+    печатаемый консолью build_grp.py, обязан считать то же множество, что и
+    столбец «Чек-лист» книги — задачи-листья, а не сетевые узлы вообще
+    (суммарные строки участвуют в сети как свёрточные контейнеры, `build_nodes()`,
+    и потому закономерно наследуют нулевой резерв от критических потомков —
+    но это не делает их задачами)."""
+    b, nodes = built
+    summaries = b.summaries()
+    console_count = build_grp.critical_task_count(nodes, summaries)
+    rows = b.finalize(nodes)
+    checklist_count = sum(1 for r in rows if r["_critical"])
+    assert console_count == checklist_count, (
+        f"счётчик консоли ({console_count}) разошёлся со счётчиком чек-листа "
+        f"({checklist_count}) — оба обязаны считать задачи-листья на критическом "
+        f"пути, исключая суммарные строки (DEC-25)")
+
+
 def test_pri_oknah_pvh_kladka_naruzhnyh_sten_prisutstvuet(built):
     """Витражей нет → BND-KLD-001 применяется, ЯКОРЬ_ОГР = кладка наружных стен."""
     b, _ = built

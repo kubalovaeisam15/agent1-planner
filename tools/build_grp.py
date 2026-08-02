@@ -1378,6 +1378,22 @@ def write_excel(path: Path, rows: list[dict], build: Build) -> None:
     return [c for c in checks if not c[2]]
 
 
+def critical_task_count(nodes: dict[str, Node], summaries: set[str]) -> int:
+    """Число задач-листьев критического пути.
+
+    Суммарная строка не является задачей: у неё нет ни «Длительности», ни
+    «% завершения» (DEC-25, CLAUDE.md §3, §9) — её узел в сети существует
+    только как свёрточный контейнер (`build_nodes()`), а не как работа. Он
+    закономерно наследует нулевой резерв от критических потомков и потому
+    часто помечается `critical=True`, но это не делает его «задачей».
+    `finalize()`/`write_excel()` уже считают именно так (`_critical` явно
+    исключает суммарные строки, `and not is_sum`) — эта функция применяет то
+    же правило к счётчику, который печатает консоль `main()`, чтобы оба места
+    считали одно и то же множество.
+    """
+    return sum(1 for k, n in nodes.items() if n.critical and k not in summaries)
+
+
 # ======================================================================
 def main() -> int:
     if len(sys.argv) < 2:
@@ -1424,10 +1440,10 @@ def main() -> int:
     failed = write_excel(out, rows, b)
 
     finish = max(n.finish for n in nodes.values() if n.finish)
-    crit = [n for n in nodes.values() if n.critical]
+    crit = critical_task_count(nodes, b.summaries())
     names = {r["key"]: r["name"] for r in b.rows}
     print(f"Строк: {len(rows)} · вех: {sum(1 for r in rows if r['Длительность'] == '0 дней')}")
-    print(f"Критический путь: {len(crit)} задач · финиш проекта {dfmt(finish)}")
+    print(f"Критический путь: {crit} задач · финиш проекта {dfmt(finish)}")
     print(f"Обоснований: {len(b.rationale)} · допущений: {len(b.assumptions)}")
     if failed:
         print("\nЧек-лист НАРУШЕН:")
