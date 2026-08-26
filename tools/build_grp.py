@@ -1423,6 +1423,72 @@ class Build:
 # ======================================================================
 # Запись Excel
 # ======================================================================
+MILESTONE_MAP_COLUMNS = [
+    "№", "Процесс", "Наименование вехи", "Уровень вехи",
+    "Дата вехи макс. ранняя, ГРП", "Дата вехи утверждённая",
+    "Резерв, дн", "Кол-во мес. от старта СМР",
+]
+
+
+def build_milestone_map(rows: list[dict], phase: str, reserve_base: date) -> list[list]:
+    """Карта вех — строгая выборка контрольных вех из готового ГРП (DEC-32)."""
+    header_name = "Фаза ГПЗУ-РС" if phase == "A" else "Фаза РС-РВЭ-Передача"
+    start = next((i for i, r in enumerate(rows) if r["Название задачи"] == header_name), None)
+    if start is None:
+        raise ValueError(f"Не найден раздел контрольных вех «{header_name}»")
+    header_lvl = rows[start]["Уровень структуры"]
+    end = len(rows)
+    for i in range(start + 1, len(rows)):
+        if rows[i]["Уровень структуры"] <= header_lvl:
+            end = i
+            break
+
+    branch = rows[start + 1:end]
+    section_lvl = header_lvl + 1
+    section_starts = [i for i, r in enumerate(branch)
+                      if r["Уровень структуры"] == section_lvl]
+    result: list[list] = []
+
+    for section_no, section_start in enumerate(section_starts, start=1):
+        section_end = (section_starts[section_no]
+                       if section_no < len(section_starts) else len(branch))
+        section = branch[section_start:section_end]
+        section_name = section[0]["Название задачи"]
+        group_lvl = section_lvl if phase == "A" else section_lvl + 1
+        current_group = section_name
+        milestone_records: list[tuple[dict, str]] = []
+        for row in section:
+            if row["Уровень структуры"] == group_lvl:
+                current_group = row["Название задачи"]
+            if row["Длительность"] == "0 дней":
+                milestone_records.append((row, current_group))
+
+        last_by_group: dict[str, int] = {}
+        for index, (_, group) in enumerate(milestone_records):
+            last_by_group[group] = index
+
+        for milestone_no, (row, group) in enumerate(milestone_records, start=1):
+            early = dparse(row["Окончание"])
+            approved_text = row["Окончание с резервом"] if phase == "B" else ""
+            reserve_days: int | str = ""
+            months: int | str = ""
+            if approved_text:
+                approved = dparse(approved_text)
+                reserve_days = (approved - early).days
+                delta_months = (approved - reserve_base).days / 30
+                # Калибровочные карты используют целое число ближайших месяцев.
+                months = (math.floor(delta_months + 0.5) if delta_months >= 0
+                          else math.ceil(delta_months - 0.5))
+            level = ("Ключевая"
+                     if last_by_group[group] == milestone_no - 1 else "Промежуточная")
+            result.append([
+                f"{section_no}.{milestone_no}", group,
+                row["Название задачи"], level, row["Окончание"], approved_text,
+                reserve_days, months,
+            ])
+    return result
+
+
 def write_excel(path: Path, rows: list[dict], build: Build) -> None:
     import openpyxl
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -1458,6 +1524,32 @@ def write_excel(path: Path, rows: list[dict], build: Build) -> None:
     for i, w in enumerate([12, 16, 9, 7, 62, 11, 13, 12, 12, 30, 24, 60, 20], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
+
+    def milestone_sheet(title: str, phase_label: str, data: list[list]):
+        s = wb.create_sheet(title)
+        s.append([build.p.get("название", "")])
+        s.append([f"Фаза: {phase_label}"])
+        s.append([])
+        s.append(MILESTONE_MAP_COLUMNS)
+        for c in range(1, len(MILESTONE_MAP_COLUMNS) + 1):
+            s.cell(4, c).font = head
+            s.cell(4, c).fill = head_fill
+            s.cell(4, c).alignment = Alignment(horizontal="center", wrap_text=True)
+        for row in data:
+            s.append(row)
+        s.append([])
+        s.append(["Утверждено"])
+        s.append(["Согласовано"])
+        for i, w in enumerate([10, 34, 72, 18, 22, 22, 14, 22], start=1):
+            s.column_dimensions[get_column_letter(i)].width = w
+        s.freeze_panes = "A5"
+        return s
+
+    reserve_base = build.reserve_base({})
+    milestone_sheet("Карта вех A", "ГПЗУ-РС",
+                    build_milestone_map(rows, "A", reserve_base))
+    milestone_sheet("Карта вех B", "РС-РВЭ-Передача",
+                    build_milestone_map(rows, "B", reserve_base))
 
     def sheet(title: str, header: list[str], data: list[list], widths: list[int]):
         s = wb.create_sheet(title)

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -57,6 +58,10 @@ COLUMNS = ["Вид работ", "Код классификатора", "Уров
 # В 12 колонок шаблона v2 не входит и в MS Project не импортируется.
 RESERVE_COL = "Окончание с резервом"
 RESERVE_PER_YEAR = 30  # календарных дней резерва на год возраста вехи
+MILESTONE_MAP_SHEETS = {
+    "Карта вех A": "Фаза ГПЗУ-РС",
+    "Карта вех B": "Фаза РС-РВЭ-Передача",
+}
 
 
 class Report:
@@ -102,16 +107,19 @@ def load(path: Path) -> list[dict]:
 
     import openpyxl
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    ws = wb[wb.sheetnames[0]]
-    rows = ws.iter_rows(values_only=True)
-    header = [cell(c) for c in next(rows)]
-    tasks = []
-    for raw in rows:
-        rec = {h: cell(v) for h, v in zip(header, raw)}
-        if not rec.get("Название задачи"):
-            continue
-        tasks.append(rec)
-    return tasks
+    try:
+        ws = wb[wb.sheetnames[0]]
+        rows = ws.iter_rows(values_only=True)
+        header = [cell(c) for c in next(rows)]
+        tasks = []
+        for raw in rows:
+            rec = {h: cell(v) for h, v in zip(header, raw)}
+            if not rec.get("Название задачи"):
+                continue
+            tasks.append(rec)
+        return tasks
+    finally:
+        wb.close()
 
 
 def load_reserve_base(path: Path) -> datetime | None:
@@ -125,18 +133,51 @@ def load_reserve_base(path: Path) -> datetime | None:
         return None
     import openpyxl
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    if "Допущения" not in wb.sheetnames:
+    try:
+        if "Допущения" not in wb.sheetnames:
+            return None
+        rows = wb["Допущения"].iter_rows(values_only=True)
+        header = [cell(c) for c in next(rows)]
+        for raw in rows:
+            rec = {h: cell(v) for h, v in zip(header, raw)}
+            if rec.get("Код") != "DEC-31":
+                continue
+            match = re.search(r"\b\d{2}\.\d{2}\.\d{4}\b", rec.get("Формулировка", ""))
+            if match:
+                return datetime.strptime(match.group(0), "%d.%m.%Y")
         return None
-    rows = wb["Допущения"].iter_rows(values_only=True)
-    header = [cell(c) for c in next(rows)]
-    for raw in rows:
-        rec = {h: cell(v) for h, v in zip(header, raw)}
-        if rec.get("Код") != "DEC-31":
-            continue
-        match = re.search(r"\b\d{2}\.\d{2}\.\d{4}\b", rec.get("Формулировка", ""))
-        if match:
-            return datetime.strptime(match.group(0), "%d.%m.%Y")
-    return None
+    finally:
+        wb.close()
+
+
+def load_milestone_maps(path: Path) -> dict[str, list[dict]]:
+    if path.suffix.lower() == ".json":
+        return {}
+    import openpyxl
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    try:
+        result: dict[str, list[dict]] = {}
+        for sheet_name in MILESTONE_MAP_SHEETS:
+            if sheet_name not in wb.sheetnames:
+                continue
+            raw_rows = list(wb[sheet_name].iter_rows(values_only=True))
+            header_index = next((i for i, row in enumerate(raw_rows)
+                                 if "Наименование вехи" in [cell(v) for v in row]), None)
+            if header_index is None:
+                result[sheet_name] = []
+                continue
+            header = [cell(v) for v in raw_rows[header_index]]
+            records = []
+            for raw in raw_rows[header_index + 1:]:
+                rec = {h: cell(v) for h, v in zip(header, raw)}
+                if rec.get("№") in ("Утверждено", "Согласовано"):
+                    break
+                if rec.get("Наименование вехи"):
+                    records.append(rec)
+            result[sheet_name] = records
+        return result
+    finally:
+        wb.close()
 
 
 def label(t: dict) -> str:
@@ -144,7 +185,8 @@ def label(t: dict) -> str:
     return f"{t.get('Ид.', '?')} «{t.get('Название задачи', '')[:38]}»"
 
 
-def validate(tasks: list[dict], reserve_base: datetime | None = None) -> int:
+def validate(tasks: list[dict], reserve_base: datetime | None = None,
+             milestone_maps: dict[str, list[dict]] | None = None) -> int:
     r = Report()
     n = len(tasks)
     print(f"Задач: {n}\n")
@@ -314,6 +356,7 @@ def validate(tasks: list[dict], reserve_base: datetime | None = None) -> int:
                        "не найдена — проверка срока передачи пропущена")
 
     check_reserve(tasks, r, reserve_base)
+    check_milestone_maps(tasks, milestone_maps or {}, r)
 
     return r.dump()
 
@@ -370,6 +413,46 @@ def check_reserve(tasks: list[dict], r: Report,
             f"{len(bad)} расхождений, напр. {bad[:3]}")
 
 
+def check_milestone_maps(tasks: list[dict], maps: dict[str, list[dict]],
+                         r: Report) -> None:
+    """DEC-32: обе карты являются точной выборкой контрольных вех ГРП."""
+    missing_sheets = [name for name in MILESTONE_MAP_SHEETS if name not in maps]
+    r.check(not missing_sheets, "листы «Карта вех A» и «Карта вех B» присутствуют",
+            f"нет: {missing_sheets}")
+    if missing_sheets:
+        return
+
+    for sheet_name, branch_name in MILESTONE_MAP_SHEETS.items():
+        start = next((i for i, task in enumerate(tasks)
+                      if task["Название задачи"] == branch_name), None)
+        if start is None:
+            r.errors.append(f"{sheet_name}: в ГРП не найден раздел «{branch_name}»")
+            continue
+        lvl = tasks[start]["_lvl"]
+        end = next((i for i in range(start + 1, len(tasks))
+                    if tasks[i]["_lvl"] <= lvl), len(tasks))
+        expected_rows = [task for task in tasks[start + 1:end]
+                         if task.get("Длительность") == "0 дней"]
+        phase_a = sheet_name.endswith(" A")
+        expected = Counter(
+            (task["Название задачи"], task["Окончание"],
+             "" if phase_a else task.get(RESERVE_COL, ""))
+            for task in expected_rows
+        )
+        actual = Counter(
+            (row.get("Наименование вехи", ""),
+             row.get("Дата вехи макс. ранняя, ГРП", ""),
+             row.get("Дата вехи утверждённая", ""))
+            for row in maps[sheet_name]
+        )
+        missing = list((expected - actual).elements())
+        extra = list((actual - expected).elements())
+        r.check(not missing and not extra,
+                f"{sheet_name} дословно соответствует вехам ГРП (DEC-32)",
+                f"пропущено {len(missing)}, лишних/изменённых {len(extra)}; "
+                f"примеры: missing={missing[:2]}, extra={extra[:2]}")
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(__doc__)
@@ -381,7 +464,7 @@ def main() -> int:
         print(f"Файл не найден: {path}")
         return 2
     print(f"=== Валидация: {path.name} (CLAUDE.md §9, машинная часть) ===\n")
-    return validate(load(path), load_reserve_base(path))
+    return validate(load(path), load_reserve_base(path), load_milestone_maps(path))
 
 
 if __name__ == "__main__":
