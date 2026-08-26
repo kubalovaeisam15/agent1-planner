@@ -7,11 +7,16 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
+import build_grp
 from tools.validate_grp import RESERVE_COL, Report, check_reserve
 
+ROOT = Path(__file__).resolve().parents[1]
 SMR = "14.03.2025"
 
 # (наименование вехи, ранняя дата, утверждённая дата) — из утверждённой карты вех.
@@ -92,3 +97,50 @@ def test_validator_requires_reserve_column():
     r = Report()
     check_reserve(tasks, r)
     assert any(RESERVE_COL in e for e in r.errors)
+
+
+@pytest.fixture(scope="module")
+def generated_etalon():
+    project = json.loads((ROOT / "tests" / "etalon_project.json").read_text(encoding="utf-8"))
+    b = build_grp.Build(project)
+    b.load_skeleton()
+    b.check_stages()
+    b.repair_defects()
+    b.inherit_summary_links()
+    b.apply_site_conditions()
+    b.configure_corpuses()
+    b.configure_zero_cycle()
+    b.configure_parking()
+    b.apply_finishing_scope()
+    b.apply_standards()
+    for corpus in project["корпуса"]:
+        b.rebuild_monolith(corpus)
+    nodes = b.schedule()
+    b.thermal(nodes)
+    b.wire_zos()
+    nodes = b.schedule()
+    rows = b.finalize(nodes)
+    return b, nodes, rows
+
+
+def test_generator_writes_column_and_keeps_phase_a_empty(generated_etalon):
+    _, _, rows = generated_etalon
+    assert RESERVE_COL in build_grp.COLUMNS
+    rs = next(r for r in rows
+              if r["Название задачи"] == "Разрешение на строительство (РС) получено")
+    rve = next(r for r in rows if r["Название задачи"] == "Получено РВЭ")
+    assert rs[RESERVE_COL] == ""       # фаза A
+    assert rve[RESERVE_COL]             # фаза B
+
+
+def test_generator_falls_back_to_calculated_rs(generated_etalon):
+    b, nodes, _ = generated_etalon
+    rs = b.one("Разрешение на строительство (РС) получено")
+    assert rs is not None
+    assert b.reserve_base(nodes) == nodes[b.rows[rs]["key"]].finish
+    assert any(a.code == "DEC-31" and "fallback" in a.text for a in b.assumptions)
+
+
+def test_explicit_start_smr_has_priority():
+    b = build_grp.Build({"старт_проекта": "10.01.2023", "старт_смр": SMR})
+    assert b.reserve_base({}).strftime("%d.%m.%Y") == SMR

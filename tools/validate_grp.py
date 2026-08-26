@@ -114,12 +114,37 @@ def load(path: Path) -> list[dict]:
     return tasks
 
 
+def load_reserve_base(path: Path) -> datetime | None:
+    """Читает применённую базу DEC-31 из листа «Допущения».
+
+    Генератор записывает туда фактически использованную дату: явный параметр
+    `старт_смр` либо рассчитанную дату РС. Это исключает угадывание по частным
+    вехам «Старт СМР по отделочным работам».
+    """
+    if path.suffix.lower() == ".json":
+        return None
+    import openpyxl
+    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    if "Допущения" not in wb.sheetnames:
+        return None
+    rows = wb["Допущения"].iter_rows(values_only=True)
+    header = [cell(c) for c in next(rows)]
+    for raw in rows:
+        rec = {h: cell(v) for h, v in zip(header, raw)}
+        if rec.get("Код") != "DEC-31":
+            continue
+        match = re.search(r"\b\d{2}\.\d{2}\.\d{4}\b", rec.get("Формулировка", ""))
+        if match:
+            return datetime.strptime(match.group(0), "%d.%m.%Y")
+    return None
+
+
 def label(t: dict) -> str:
     """Адрес строки для сообщений. СДР больше нет — «Ид. + наименование»."""
     return f"{t.get('Ид.', '?')} «{t.get('Название задачи', '')[:38]}»"
 
 
-def validate(tasks: list[dict]) -> int:
+def validate(tasks: list[dict], reserve_base: datetime | None = None) -> int:
     r = Report()
     n = len(tasks)
     print(f"Задач: {n}\n")
@@ -288,12 +313,13 @@ def validate(tasks: list[dict]) -> int:
         r.warns.append("справочно: веха «Передача квартир без отделки» или «РВЭ по этапу» "
                        "не найдена — проверка срока передачи пропущена")
 
-    check_reserve(tasks, r)
+    check_reserve(tasks, r, reserve_base)
 
     return r.dump()
 
 
-def check_reserve(tasks: list[dict], r: Report) -> None:
+def check_reserve(tasks: list[dict], r: Report,
+                  reserve_base: datetime | None = None) -> None:
     """Резерв фазы B: DEC-31, standards.md §17а.
 
     Резерв_дн = ОКРВВЕРХ((Окончание - старт СМР)/365*30); до старта СМР — 0.
@@ -305,15 +331,19 @@ def check_reserve(tasks: list[dict], r: Report) -> None:
                         "(DEC-31, typGRP.md §2 колонка 13)")
         return
 
-    smr = next((t for t in tasks
-                if "старт смр" in t["Название задачи"].strip().lower()
-                and t.get("Начало")), None)
-    if not smr:
-        r.warns.append("справочно: веха старта СМР не найдена — арифметика резерва "
-                       "не проверена (база отсчёта DEC-31 неизвестна)")
+    base = reserve_base
+    if base is None:
+        # Совместимость с изолированными тестами и старыми книгами: принимается
+        # только точная общая веха, но не частные «Старт СМР — отделка ...».
+        smr = next((t for t in tasks
+                    if t["Название задачи"].strip().lower() == "старт смр"
+                    and t.get("Начало")), None)
+        if smr:
+            base = datetime.strptime(smr["Начало"], "%d.%m.%Y")
+    if base is None:
+        r.errors.append("база резерва DEC-31 не найдена: нет строки DEC-31 с датой "
+                        "в листе «Допущения» и нет общей вехи «Старт СМР»")
         return
-
-    base = datetime.strptime(smr["Начало"], "%d.%m.%Y")
     bad, filled = [], 0
     for t in tasks:
         got = t.get(RESERVE_COL)
@@ -351,7 +381,7 @@ def main() -> int:
         print(f"Файл не найден: {path}")
         return 2
     print(f"=== Валидация: {path.name} (CLAUDE.md §9, машинная часть) ===\n")
-    return validate(load(path))
+    return validate(load(path), load_reserve_base(path))
 
 
 if __name__ == "__main__":

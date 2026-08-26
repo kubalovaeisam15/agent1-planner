@@ -54,7 +54,33 @@ SKELETON = ROOT / "tests" / "template_parsed.json"
 
 COLUMNS = ["Вид работ", "Код классификатора", "Уровень структуры", "Ид.",
            "Название задачи", "% завершения", "Длительность", "Начало", "Окончание",
-           "Предшественники", "Последователи", "комментарий"]
+           "Предшественники", "Последователи", "комментарий",
+           "Окончание с резервом"]
+
+RESERVE_PER_YEAR = 30  # standards.md §17а, DEC-31
+
+PHASE_A_ROOTS = {
+    "Земельно-правовые отношения",
+    "Разработка и согласование ППТ",
+    "Получен ГПЗУ",
+    "Предпроектные проработки, Стадия Проект",
+    "Планирование",
+    "Получение разрешения на строительство",
+    "Старт продаж",
+    "Наружные инженерные сети ТУ/ТП",
+}
+
+PHASE_B_ROOTS = {
+    "Разработка РД",
+    "Тендеры и контрактование",
+    "СМР",
+    "ЗОС и РВЭ",
+    "Вынос сетей из пятна застройки",
+    "Наружные инженерные сети ПИР",
+    "Наружные инженерные сети СМР/ПНР",
+    "Наружные инженерные сети ввод/передача",
+    "Передача собственникам",
+}
 
 # Старт эталонного проекта — typGRP.md §1.1. База для переноса календарных якорей.
 ETALON_START = dparse("10.01.2023")
@@ -84,6 +110,7 @@ class Build:
         self.corpus_prefix: dict[str, str] = {}     # код корпуса → префикс в графике
         self.fit_tasks: list[tuple[str, str]] = []  # (ключ задачи отделки, код объекта)
         self.parking_prefix: str | None = None
+        self._reserve_base: date | None = None
 
     # -- служебное ------------------------------------------------------
     def note(self, code: str, text: str, scope: str = "") -> None:
@@ -156,19 +183,56 @@ class Build:
         raw = json.loads(SKELETON.read_text(encoding="utf-8"))
         known = {r["Ид."] for r in raw}
         self.rows = []
+        root = ""
+        control_branch = ""
+        integration_phase_b = False
         for r in raw:
+            lvl = int(r["Уровень структуры"])
+            name = r["Название задачи"]
+            if lvl == 1:
+                root = name
+                control_branch = ""
+                integration_phase_b = False
+
+            if root == "Контрольные вехи":
+                if lvl == 2:
+                    control_branch = name
+                    integration_phase_b = False
+                if control_branch == "Фаза ГПЗУ-РС":
+                    phase = "A"
+                elif control_branch == "Фаза РС-РВЭ-Передача":
+                    phase = "B"
+                elif control_branch == "Контрольные вехи проектирование для интеграции":
+                    if lvl == 3 and name == "Разработка РД":
+                        integration_phase_b = True
+                    # Суммарная строка блока охватывает обе фазы; её окончание
+                    # относится к фазе B и получает резерв от собственной даты.
+                    phase = "B" if lvl == 2 or integration_phase_b else "A"
+                else:
+                    # Корневая суммарная строка «Контрольные вехи» охватывает B.
+                    phase = "B"
+            elif root in PHASE_A_ROOTS:
+                phase = "A"
+            elif root in PHASE_B_ROOTS:
+                phase = "B"
+            else:
+                raise SystemExit(
+                    f"Не определена фаза верхнего раздела «{root}» — обновите карту фаз "
+                    f"typGRP.md §4 перед расчётом резерва DEC-31.")
+
             links = [(str(pid), kind, lag)
                      for pid, kind, lag in parse_links(r["Предшественники"])
                      if str(pid) in known]
             self.rows.append({
                 "key": r["Ид."],
-                "lvl": r["Уровень структуры"],
-                "name": r["Название задачи"],
+                "lvl": lvl,
+                "name": name,
                 "dur": self._dur(r["Длительность"]),
                 "links": links,
                 "comment": r["комментарий"],
                 "tpl_start": r["Начало"],
                 "src": "шаблон v2 (typGRP.md)",
+                "phase": phase,
             })
         self.why("Каркас", f"{len(self.rows)} строк",
                  "typGRP.md §3, шаблон v2 — 1 672 задачи", "высокая",
@@ -206,7 +270,8 @@ class Build:
                             "name": f"{label} {subject}", "dur": dur,
                             "links": [(prev, "ОН", 0)] if prev else list(head_links),
                             "comment": "", "tpl_start": "",
-                            "src": "восстановлено, typGRP.md §13 расх. 3"})
+                            "src": "восстановлено, typGRP.md §13 расх. 3",
+                            "phase": head["phase"]})
                 prev = k
             self.rows[i + 1:i + 1] = new
             return [r["key"] for r in new]
@@ -890,13 +955,15 @@ class Build:
                         "dur": first if i == 1 else k,
                         "links": [(prev, "ОН", 0)] if prev else list(head_links),
                         "comment": f"STD-MON-001: {'первый этаж' if i == 1 else f'K = {k} дн'}",
-                        "tpl_start": "", "src": "standards.md §9 STD-MON-001"})
+                        "tpl_start": "", "src": "standards.md §9 STD-MON-001",
+                        "phase": self.rows[head]["phase"]})
             prev = key
         roof_key = self.newkey()
         new.append({"key": roof_key, "lvl": lvl, "name": f"{pref}. Кровля/Парапет Монолит",
                     "dur": roof, "links": [(prev, "ОН", 0)],
                     "comment": "STD-MON-001: кровля/парапет. ЯКОРЬ — последний куб бетона",
-                    "tpl_start": "", "src": "standards.md §9 STD-MON-001"})
+                    "tpl_start": "", "src": "standards.md §9 STD-MON-001",
+                    "phase": self.rows[head]["phase"]})
         self.rows[kids[0]:kids[0]] = new
 
         # Лаги пересчитываются, а не копируются — typGRP.md §12.2.
@@ -1275,17 +1342,57 @@ class Build:
     # ==================================================================
     # 10. Финализация
     # ==================================================================
+    def reserve_base(self, nodes: dict[str, Node]) -> date:
+        """База DEC-31: явный `старт_смр`, иначе рассчитанная дата РС.
+
+        База записывается в «Допущения», чтобы валидатор не пытался угадывать
+        её по частным вехам вида «Старт СМР по отделочным работам».
+        """
+        if self._reserve_base is not None:
+            return self._reserve_base
+
+        explicit = self.p.get("старт_смр")
+        if explicit:
+            base = dparse(str(explicit))
+            source = "явный параметр ТЭП `старт_смр`"
+        else:
+            rs = self.one("Разрешение на строительство (РС) получено")
+            if rs is None:
+                rs = self.one("Разрешение на строительство получено")
+            if rs is None:
+                raise SystemExit(
+                    "Не найдена веха РС для базы резерва DEC-31 и не задан `старт_смр`.")
+            node = nodes.get(self.rows[rs]["key"])
+            if node is None or node.finish is None:
+                raise SystemExit("Веха РС не рассчитана — база резерва DEC-31 неизвестна.")
+            base = node.finish
+            source = "рассчитанная дата РС (fallback при отсутствии `старт_смр`)"
+
+        self._reserve_base = base
+        self.note(
+            "DEC-31",
+            f"Резерв фазы B рассчитан от {dfmt(base)}: {source}; норма "
+            f"{RESERVE_PER_YEAR} календарных дней на год, округление вверх. "
+            "Резерв не участвует в связях и не каскадируется.")
+        return base
+
     def finalize(self, nodes: dict[str, Node]) -> list[dict]:
         summaries = self.summaries()
         key2id = {r["key"]: i + 1 for i, r in enumerate(self.rows)}
         out: list[dict] = []
         succ: dict[int, list[int]] = {}
+        reserve_base = self.reserve_base(nodes)
 
         for i, r in enumerate(self.rows, start=1):
             key = r["key"]
             is_sum = key in summaries
             n = nodes.get(key)
             links = [(key2id[t], k, lg) for t, k, lg in r["links"] if t in key2id]
+            reserve_finish = ""
+            if r["phase"] == "B" and n and n.finish:
+                age = max(0, (n.finish - reserve_base).days)
+                reserve_days = math.ceil(age / 365 * RESERVE_PER_YEAR)
+                reserve_finish = dfmt(n.finish + timedelta(days=reserve_days))
             # DEC-27: «Последователи» — только Ид., без кода связи и лага.
             if not is_sum:
                 for pid, _, _ in links:
@@ -1304,6 +1411,7 @@ class Build:
                 "Последователи": "",
                 "комментарий": ("КРИТИЧЕСКИЙ ПУТЬ · " if (n and n.critical and not is_sum) else "")
                                + r.get("comment", ""),
+                "Окончание с резервом": reserve_finish,
                 "_critical": bool(n and n.critical) and not is_sum,
                 "_source": r.get("src", ""),
             })
@@ -1347,7 +1455,7 @@ def write_excel(path: Path, rows: list[dict], build: Build) -> None:
                 ws.cell(i, c).fill = crit_fill
         ws.cell(i, name_col).alignment = Alignment(indent=max(0, r["Уровень структуры"] - 1))
 
-    for i, w in enumerate([12, 16, 9, 7, 62, 11, 13, 12, 12, 30, 24, 60], start=1):
+    for i, w in enumerate([12, 16, 9, 7, 62, 11, 13, 12, 12, 30, 24, 60, 20], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
 
@@ -1378,6 +1486,8 @@ def write_excel(path: Path, rows: list[dict], build: Build) -> None:
     sums = [r for r in rows if not r["Длительность"]]
     checks = [
         ("Структура", "Выведены все 12 колонок", True),
+        ("Структура", "Выведена колонка 13 «Окончание с резервом» (DEC-31)",
+         all("Окончание с резервом" in r for r in rows)),
         ("Структура", "Уровень первой строки = 1", rows[0]["Уровень структуры"] == 1),
         ("Структура", "Уровень не растёт больше чем на 1",
          all(rows[i]["Уровень структуры"] - rows[i - 1]["Уровень структуры"] <= 1
