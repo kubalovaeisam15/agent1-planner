@@ -2,6 +2,7 @@
 """Генератор ГРП: развёртывание каркаса typGRP.md v4.0 в Excel для импорта в MS Project.
 
     python tools/build_grp.py tests/etalon_project.json out/ГРП.xlsx
+    python tools/build_grp.py tests/etalon_project.json out/ГРП.xlsx --ir out/ГРП.ir.json
 
 Конвейер:
     1. каркас из шаблона v2 (tests/template_parsed.json)
@@ -29,6 +30,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import re
@@ -43,6 +45,7 @@ from grp_model import (  # noqa: E402
     fmt_links, forward_pass, monolith_floor_durations, parse_links, pile_duration,
     seasonal_duration,
 )
+from schedule_ir import schedule_from_grp, validate_schedule_ir, write_schedule_ir  # noqa: E402
 
 # Консоль Windows может быть в cp1251: не даём выводу падать на символах,
 # которых нет в её кодировке (стрелки, типографика).
@@ -1642,16 +1645,27 @@ def critical_task_count(nodes: dict[str, Node], summaries: set[str]) -> int:
 
 
 # ======================================================================
-def main() -> int:
-    if len(sys.argv) < 2:
-        print(__doc__)
-        return 2
-    spec = Path(sys.argv[1])
+def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Собрать ГРП в Excel")
+    parser.add_argument("spec", type=Path, help="JSON с параметрами проекта")
+    parser.add_argument("out", type=Path, nargs="?", default=Path("out/ГРП.xlsx"),
+                        help="выходной Excel (по умолчанию out/ГРП.xlsx)")
+    parser.add_argument("--ir", type=Path, default=None,
+                        help="дополнительно записать Schedule IR v1.0 в JSON")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_cli_args(argv)
+    spec = args.spec
     if not spec.is_absolute():
         spec = ROOT / spec
-    out = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "out" / "ГРП.xlsx"
+    out = args.out
     if not out.is_absolute():
         out = ROOT / out
+    ir_out = args.ir
+    if ir_out is not None and not ir_out.is_absolute():
+        ir_out = ROOT / ir_out
 
     project = json.loads(spec.read_text(encoding="utf-8"))
     b = Build(project)
@@ -1684,7 +1698,21 @@ def main() -> int:
     b.report_anchors(nodes)
     rows = b.finalize(nodes)
 
+    schedule_ir = None
+    if ir_out is not None:
+        schedule_ir = schedule_from_grp(project, rows)
+        ir_issues = validate_schedule_ir(schedule_ir)
+        if ir_issues:
+            print("\nSchedule IR НАРУШЕН:")
+            for issue in ir_issues:
+                address = f" [{issue.task_id}]" if issue.task_id else ""
+                print(f"  ! {issue.code}{address}: {issue.message}")
+            return 1
+
     failed = write_excel(out, rows, b)
+    if ir_out is not None and schedule_ir is not None:
+        ir_out.parent.mkdir(parents=True, exist_ok=True)
+        write_schedule_ir(ir_out, schedule_ir)
 
     finish = max(n.finish for n in nodes.values() if n.finish)
     crit = critical_task_count(nodes, b.summaries())
@@ -1701,6 +1729,8 @@ def main() -> int:
         for n in b.notices:
             print(f"  ! {n}")
     print(f"\nЗаписано: {out}")
+    if ir_out is not None:
+        print(f"Schedule IR: {ir_out}")
     return 0
 
 

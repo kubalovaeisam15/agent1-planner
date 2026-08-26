@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import uuid4
 
 import build_grp
 from schedule_ir import ScheduleProject, schedule_from_grp, validate_schedule_ir
@@ -75,3 +76,25 @@ def test_ir_validator_rejects_self_link():
         lag_days=0,
     )
     assert "IR-LINK-SELF" in {issue.code for issue in validate_schedule_ir(schedule)}
+
+
+def test_cli_writes_ir_when_requested():
+    out_dir = ROOT / "out"
+    out_dir.mkdir(exist_ok=True)
+    token = uuid4().hex
+    xlsx_path = out_dir / f"test-ir-{token}.xlsx"
+    ir_path = out_dir / f"test-ir-{token}.json"
+    try:
+        code = build_grp.main([
+            "tests/etalon_project.json",
+            str(xlsx_path),
+            "--ir", str(ir_path),
+        ])
+        assert code == 0
+        assert xlsx_path.exists()
+        assert ir_path.exists()
+        restored = ScheduleProject.from_json(ir_path.read_text(encoding="utf-8"))
+        assert validate_schedule_ir(restored) == []
+    finally:
+        xlsx_path.unlink(missing_ok=True)
+        ir_path.unlink(missing_ok=True)

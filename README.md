@@ -50,6 +50,9 @@ python tools\parse_template.py
 # сборка графика
 python tools\build_grp.py tests\etalon_project.json out\ГРП_эталон.xlsx
 
+# сборка Excel и дополнительного Schedule IR JSON
+python tools\build_grp.py tests\etalon_project.json out\ГРП_эталон.xlsx --ir out\ГРП_эталон.ir.json
+
 # валидация выдачи по чек-листу §9
 python tools\validate_grp.py out\ГРП_эталон.xlsx
 
