@@ -1183,6 +1183,12 @@ class Build:
 
             heat_i = self.one("Пуск тепла корпус", pref)
             if heat_i is not None:
+                # Если ВТК выше был удалён, индексы следующих строк сдвинулись.
+                # Повторно находим отопительный контур по точному имени, иначе
+                # сохранённый индекс `loop` указывает на соседнюю задачу
+                # «Отопление (все система полностью)» (имя из шаблона;
+                # дефект проявлялся у К1).
+                loop = self.one("По договору Отопление (контур для пуска тепла)", pref)
                 effective_contour = vtk if res.temp_contour and vtk is not None else contour
                 heat_preds = [effective_contour, itp, loop]
                 self.rows[heat_i]["dur"] = 0

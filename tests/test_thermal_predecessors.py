@@ -72,3 +72,15 @@ def test_pusk_tepla_imeet_tri_fakticheskih_predshestvennika(built):
         (loop, "ОН", 15),
     }
     assert all(pred != roof for pred, _, _ in b.rows[heat]["links"])
+
+
+def test_pusk_tepla_k1_ssylaetsya_na_kontur_a_ne_na_vsyu_sistemu(built):
+    """Удаление неприменимого ВТК не должно сдвигать ссылку на соседнюю строку."""
+    b = built
+    heat = b.one("Пуск тепла корпус", "К1")
+    assert heat is not None
+    loop = key(b, "По договору Отопление (контур для пуска тепла)", "К1")
+    full = key(b, "По договору Отопление (все система полностью)", "К1")
+    predecessors = {pred for pred, _, _ in b.rows[heat]["links"]}
+    assert loop in predecessors
+    assert full not in predecessors
