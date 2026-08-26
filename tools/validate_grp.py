@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Консоль Windows может быть в cp1251: не даём выводу падать на символах,
@@ -52,6 +52,11 @@ REQUIRED_MILESTONES = {
 COLUMNS = ["Вид работ", "Код классификатора", "Уровень структуры", "Ид.",
            "Название задачи", "% завершения", "Длительность", "Начало", "Окончание",
            "Предшественники", "Последователи", "комментарий"]
+
+# Колонка 13 — надстройка над результатом расчёта (DEC-31, standards.md §17а).
+# В 12 колонок шаблона v2 не входит и в MS Project не импортируется.
+RESERVE_COL = "Окончание с резервом"
+RESERVE_PER_YEAR = 30  # календарных дней резерва на год возраста вехи
 
 
 class Report:
@@ -283,7 +288,56 @@ def validate(tasks: list[dict]) -> int:
         r.warns.append("справочно: веха «Передача квартир без отделки» или «РВЭ по этапу» "
                        "не найдена — проверка срока передачи пропущена")
 
+    check_reserve(tasks, r)
+
     return r.dump()
+
+
+def check_reserve(tasks: list[dict], r: Report) -> None:
+    """Резерв фазы B: DEC-31, standards.md §17а.
+
+    Резерв_дн = ОКРВВЕРХ((Окончание - старт СМР)/365*30); до старта СМР — 0.
+    Проверяем наличие колонки и арифметику, а не сам факт сдвига дат: резерв
+    не каскадируется, поэтому связи и длительности им затрагиваться не должны.
+    """
+    if RESERVE_COL not in tasks[0]:
+        r.errors.append(f"колонка «{RESERVE_COL}» отсутствует — резерв не выведен "
+                        "(DEC-31, typGRP.md §2 колонка 13)")
+        return
+
+    smr = next((t for t in tasks
+                if "старт смр" in t["Название задачи"].strip().lower()
+                and t.get("Начало")), None)
+    if not smr:
+        r.warns.append("справочно: веха старта СМР не найдена — арифметика резерва "
+                       "не проверена (база отсчёта DEC-31 неизвестна)")
+        return
+
+    base = datetime.strptime(smr["Начало"], "%d.%m.%Y")
+    bad, filled = [], 0
+    for t in tasks:
+        got = t.get(RESERVE_COL)
+        if not got or not t.get("Окончание"):
+            continue
+        filled += 1
+        try:
+            fin = datetime.strptime(t["Окончание"], "%d.%m.%Y")
+            got_d = datetime.strptime(got, "%d.%m.%Y")
+        except ValueError:
+            bad.append(f"{label(t)}: дата не в формате ДД.ММ.ГГГГ")
+            continue
+        age = (fin - base).days
+        res = -(-age * RESERVE_PER_YEAR // 365) if age > 0 else 0  # округление вверх
+        exp = fin + timedelta(days=res)
+        if got_d != exp:
+            bad.append(f"{label(t)}: {got} вместо {exp.strftime('%d.%m.%Y')} "
+                       f"(возраст {age} дн → резерв {res} дн)")
+
+    r.check(filled > 0, f"колонка «{RESERVE_COL}» заполнена",
+            "колонка присутствует, но пуста во всех строках")
+    r.check(not bad, f"резерв посчитан по формуле DEC-31 ({RESERVE_PER_YEAR} дн/год "
+                     "от старта СМР)",
+            f"{len(bad)} расхождений, напр. {bad[:3]}")
 
 
 def main() -> int:

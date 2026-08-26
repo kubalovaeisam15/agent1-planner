@@ -1075,21 +1075,58 @@ class Build:
                 self.rows[i]["tpl_start"] = ""
                 self.rows[i]["comment"] = f"{comment} · ОН от ЯКОРЬ, лаг {lag:+d} дн"
 
-            link_to_anchor(self.one("Закрыт тепловой контур по корпусу", pref), res.tc_perm, 0,
-                           f"TC_perm, BND-TC-001, тип фасада {facade}")
+            # DEC-33: контрольные вехи теплового блока связываются с реальными
+            # физическими предшественниками. Расчётная дата res.* используется
+            # для проверки, но не заменяется искусственным лагом от ЯКОРЬ.
+            contour = self.one("Закрыт тепловой контур по корпусу", pref)
+            if contour is not None:
+                if facade.lower() in ("модульный", "панельный"):
+                    contour_preds = [self.one("По договору Монтаж фасадов", pref)]
+                else:
+                    contour_preds = [pvc, stained]
+                contour_preds = [i for i in contour_preds if i is not None]
+                self.rows[contour]["dur"] = 0
+                self.rows[contour]["links"] = [
+                    (self.rows[i]["key"], "ОН", 0) for i in contour_preds
+                ]
+                self.rows[contour]["tpl_start"] = ""
+                self.rows[contour]["comment"] = (
+                    f"TC_perm, BND-TC-001, DEC-33: ОН +0 от "
+                    + ("монтажа модульного фасада" if facade.lower() in ("модульный", "панельный")
+                       else "всех предусмотренных видов остекления"))
+
             vtk = self.one("Закрыт ВРЕМЕННЫЙ тепловой контур по корпусу (при необходимости)", pref)
             if res.temp_contour:
-                link_to_anchor(vtk, res.temp_contour[0], Std.TEMP_CONTOUR[0],
-                               "ВТК, BND-TC-002: финиш 30.09 года старта отделки, 45 дн")
+                if vtk is not None:
+                    self.rows[vtk]["dur"] = Std.TEMP_CONTOUR[0]
+                    self.rows[vtk]["tpl_start"] = ""
+                    if ext is not None:
+                        self.rows[vtk]["links"] = [(self.rows[ext]["key"], "ОО", 0)]
+                        self.rows[vtk]["comment"] = (
+                            "ВТК, BND-TC-002, DEC-33: длительность 45 дн; "
+                            "ОО +0 от кладки наружных стен")
+                    else:
+                        link_to_anchor(vtk, res.temp_contour[0], Std.TEMP_CONTOUR[0],
+                                       "ВТК, BND-TC-002: наружная кладка отсутствует, "
+                                       "финиш 30.09 года старта отделки")
             elif vtk is not None:
                 del self.rows[vtk]
                 self.note("BND-TC-002", "ВТК не развёрнут: условие не выполнено либо "
                                         "развёртывание не даёт эффекта.", corpus["код"])
 
             heat_i = self.one("Пуск тепла корпус", pref)
-            link_to_anchor(heat_i, res.heat, 0,
-                           f"Пуск тепла, BND-TC-003: max(TC_eff, ИТП, отопление) "
-                           f"+ {Bnd.LAG_HEAT[0]} дн (R-02)")
+            if heat_i is not None:
+                effective_contour = vtk if res.temp_contour and vtk is not None else contour
+                heat_preds = [effective_contour, itp, loop]
+                self.rows[heat_i]["dur"] = 0
+                self.rows[heat_i]["links"] = [
+                    (self.rows[i]["key"], "ОН", Bnd.LAG_HEAT[0])
+                    for i in heat_preds if i is not None
+                ]
+                self.rows[heat_i]["tpl_start"] = ""
+                self.rows[heat_i]["comment"] = (
+                    "Пуск тепла, BND-TC-003, DEC-33: max(действующий контур, ИТП, "
+                    f"отопление-контур), каждый ОН +{Bnd.LAG_HEAT[0]} дн")
 
             # --- отделка: пишется в задачи-листья, не в суммарные строки ---
             fit_leaves = []

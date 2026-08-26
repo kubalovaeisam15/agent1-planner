@@ -2,4 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 out/
+outputs/
+data/
 ~$*.xlsx

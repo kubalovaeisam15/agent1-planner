@@ -381,15 +381,19 @@ def compute_thermal_and_fit(
         tr.append(f"условие ВТК выполнено ({why}); ВТК {dfmt(ts)} → {dfmt(tf)}, "
                   f"TC_eff = min(TC_perm, ВТК) = {dfmt(cand_eff)}")
 
-        if cand_heat < heat or cand_window > window:
-            temp_contour = (ts, tf)
-            tc_eff, heat, fit_start, window = cand_eff, cand_heat, cand_start, cand_window
+        # DEC-33: если условие ВТК выполнено, он остаётся физической частью
+        # теплового контура независимо от того, меняет ли ведущего
+        # предшественника пуска тепла. Иначе веха Heat теряет реальную связь с
+        # действующим контуром и искусственно привязывается к календарной дате.
+        has_schedule_effect = cand_heat < heat or cand_window > window
+        temp_contour = (ts, tf)
+        tc_eff, heat, fit_start, window = cand_eff, cand_heat, cand_start, cand_window
+        if has_schedule_effect:
             tr.append(f"ВТК даёт эффект: пуск тепла {dfmt(heat)}, старт отделки {dfmt(fit_start)}, "
                       f"окно {window} дн (BND-TC-002)")
         else:
-            tr.append("ВТК эффекта не даёт — в график не добавляется (bindings.md §3.5)")
-            a.append(Assumption("BND-TC-002", "Условие ВТК выполнено, но развёртывание не меняет "
-                                              "ни пуск тепла, ни окно отделки — задача не добавлена."))
+            tr.append("ВТК не меняет итоговую дату, но сохраняется как действующий контур "
+                      "и прямой предшественник пуска тепла (DEC-33)")
 
     # --- финиш отделки ----------------------------------------------------
     overrun = 0
