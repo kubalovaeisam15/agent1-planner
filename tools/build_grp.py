@@ -1420,6 +1420,8 @@ class Build:
                 "Окончание с резервом": reserve_finish,
                 "_critical": bool(n and n.critical) and not is_sum,
                 "_source": r.get("src", ""),
+                "_source_key": key,
+                "_phase": r.get("phase"),
             })
         for row in out:
             row["Последователи"] = "; ".join(str(x) for x in succ.get(row["Ид."], []))
