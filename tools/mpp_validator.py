@@ -10,8 +10,8 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Literal
+from uuid import uuid4
 from xml.etree import ElementTree as ET
 
 from grp_model import parse_links
@@ -199,8 +199,11 @@ def read_mpp(mpp_path: Path, *, timeout_seconds: int = 300) -> MPPSnapshot:
         raise ValueError("Входной файл должен иметь расширение .mpp")
     if not BRIDGE.exists():
         raise FileNotFoundError(f"Не найден COM-мост: {BRIDGE}")
-    with TemporaryDirectory(prefix="agent1-mpp-read-") as temp_dir:
-        snapshot_path = Path(temp_dir) / "snapshot.json"
+    # Временный снимок держим рядом с MPP без отдельного TemporaryDirectory:
+    # в локальной песочнице Windows каталог с mode=0700 может стать недоступен
+    # даже создавшему его процессу. Уникальный файл удаляется в finally.
+    snapshot_path = mpp_path.parent / f".agent1-mpp-read-{uuid4().hex}.json"
+    try:
         command = [
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
             "-File", str(BRIDGE), "-InputMpp", str(mpp_path),
@@ -216,6 +219,8 @@ def read_mpp(mpp_path: Path, *, timeout_seconds: int = 300) -> MPPSnapshot:
         if not snapshot_path.exists():
             raise RuntimeError("Microsoft Project не создал JSON-снимок")
         return parse_com_snapshot(snapshot_path)
+    finally:
+        snapshot_path.unlink(missing_ok=True)
 
 
 def validate_snapshot(snapshot: MPPSnapshot) -> list[MPPIssue]:

@@ -29,6 +29,7 @@ tools/
   project_com_bridge.ps1       локальный COM-мост к установленному Microsoft Project
   mpp_validator.py             чтение и проверка MPP, точная сверка с Schedule IR
   project_read_bridge.ps1      безопасный COM-мост MPP → компактный снимок JSON
+  mcp_server.py                локальный MCP STDIO-сервер для Codex
   validate_grp.py              валидатор выдачи по машинной части чек-листа §9
   check_regression.py          сверка с эталоном по критериям приёмки §10
   inspect_template.py          разведка структуры xlsx
@@ -63,6 +64,9 @@ python tools\mspdi_adapter.py out\ГРП_эталон.ir.json out\ГРП_эта�
 # проверка сети MPP и точная сверка с исходным Schedule IR
 python tools\mpp_validator.py out\ГРП_эталон.mpp --ir out\ГРП_эталон.ir.json --json-report out\ГРП_эталон.mpp-report.json
 
+# локальный MCP-сервер (обычно запускается самим Codex)
+python tools\mcp_server.py
+
 # валидация выдачи по чек-листу §9
 python tools\validate_grp.py out\ГРП_эталон.xlsx
 
@@ -72,6 +76,9 @@ python tools\check_regression.py out\ГРП_эталон.xlsx
 # юнит-тесты генератора
 python -m pytest tests -q
 ```
+
+Подключение MCP к Codex и описание доступных инструментов —
+[`docs/mcp-codex.md`](docs/mcp-codex.md).
 
 ## Что изменил шаблон v2
 
