@@ -27,6 +27,8 @@ tools/
   schedule_ir.py               нейтральная модель расписания для Excel, MCP и Microsoft Project
   mspdi_adapter.py             запись Schedule IR в новый MPP через Project XML + COM
   project_com_bridge.ps1       локальный COM-мост к установленному Microsoft Project
+  mpp_validator.py             чтение и проверка MPP, точная сверка с Schedule IR
+  project_read_bridge.ps1      безопасный COM-мост MPP → компактный снимок JSON
   validate_grp.py              валидатор выдачи по машинной части чек-листа §9
   check_regression.py          сверка с эталоном по критериям приёмки §10
   inspect_template.py          разведка структуры xlsx
@@ -57,6 +59,9 @@ python tools\build_grp.py tests\etalon_project.json out\ГРП_эталон.xlsx
 
 # создание нового MPP из Schedule IR (существующий MPP не перезаписывается)
 python tools\mspdi_adapter.py out\ГРП_эталон.ir.json out\ГРП_эталон.mpp
+
+# проверка сети MPP и точная сверка с исходным Schedule IR
+python tools\mpp_validator.py out\ГРП_эталон.mpp --ir out\ГРП_эталон.ir.json --json-report out\ГРП_эталон.mpp-report.json
 
 # валидация выдачи по чек-листу §9
 python tools\validate_grp.py out\ГРП_эталон.xlsx
