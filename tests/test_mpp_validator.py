@@ -4,7 +4,16 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from mpp_validator import compare_with_ir, duration_minutes, parse_mspdi, validate_snapshot
+from mpp_validator import (
+    MPPLink,
+    MPPSnapshot,
+    MPPTask,
+    compare_with_ir,
+    duration_minutes,
+    parse_mspdi,
+    report_dict,
+    validate_snapshot,
+)
 from schedule_ir import ScheduleLink, ScheduleProject, ScheduleTask
 
 
@@ -73,3 +82,51 @@ def test_validator_detects_negative_slack(tmp_path: Path):
                                 "<TotalSlack>-1440</TotalSlack>", 1), encoding="utf-8")
     snapshot = parse_mspdi(path)
     assert "MPP-NEGATIVE-SLACK" in {issue.code for issue in validate_snapshot(snapshot)}
+
+
+def mpp_task(uid: int, name: str, level: int, *, summary: bool = False,
+             milestone: bool = False, critical: bool = False,
+             predecessors: list[MPPLink] | None = None) -> MPPTask:
+    return MPPTask(
+        uid=uid, task_id=uid, name=name, outline_level=level, summary=summary,
+        milestone=milestone, start=date(2026, 1, 1), finish=date(2026, 1, 2),
+        duration_minutes=0 if milestone else 1440, percent_complete=0,
+        critical=critical, total_slack_minutes=0, constraint_type=0,
+        deadline=None, predecessors=predecessors or [],
+    )
+
+
+def test_summary_links_cover_nested_leaf_network_and_critical_path():
+    snapshot = MPPSnapshot("Тест", date(2026, 1, 1), date(2026, 1, 2), [
+        mpp_task(1, "Старт", 1, milestone=True, critical=True),
+        mpp_task(2, "Блок", 1, summary=True, critical=True,
+                 predecessors=[MPPLink(1, "FS", 0)]),
+        mpp_task(3, "Внутренняя работа", 2, critical=True),
+        mpp_task(4, "Финиш", 1, milestone=True, critical=True,
+                 predecessors=[MPPLink(2, "FS", 0)]),
+    ])
+    issues = validate_snapshot(snapshot)
+    nested_codes = {issue.code for issue in issues if issue.task_id == 3}
+    assert "MPP-OPEN-START" not in nested_codes
+    assert "MPP-OPEN-FINISH" not in nested_codes
+    assert "MPP-CRITICAL-GAP-IN" not in nested_codes
+    assert "MPP-CRITICAL-GAP-OUT" not in nested_codes
+    coverage = next(issue for issue in issues
+                    if issue.code == "MPP-SUMMARY-LINK-COVERAGE")
+    assert coverage.severity == "info"
+
+
+def test_reporting_milestone_is_not_treated_as_open_finish():
+    snapshot = MPPSnapshot("Тест", date(2026, 1, 1), date(2026, 1, 1), [
+        mpp_task(1, "Контрольные вехи", 1, summary=True),
+        mpp_task(2, "РВЭ получено", 2, milestone=True),
+    ])
+    issues = validate_snapshot(snapshot)
+    assert not any(issue.code == "MPP-OPEN-FINISH" and issue.task_id == 2
+                   for issue in issues)
+    reporting = next(issue for issue in issues
+                     if issue.code == "MPP-REPORTING-MILESTONES")
+    assert reporting.severity == "info"
+    result = report_dict(snapshot, issues)["result"]
+    assert result["infos"] == 1
+    assert result["warnings"] == 2  # открытое начало + отсутствие критического пути

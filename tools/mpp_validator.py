@@ -62,7 +62,7 @@ class MPPSnapshot:
 
 @dataclass(frozen=True)
 class MPPIssue:
-    severity: Literal["error", "warning"]
+    severity: Literal["error", "warning", "info"]
     code: str
     message: str
     task_id: int | None = None
@@ -223,6 +223,18 @@ def read_mpp(mpp_path: Path, *, timeout_seconds: int = 300) -> MPPSnapshot:
         snapshot_path.unlink(missing_ok=True)
 
 
+def _ancestor_map(tasks: list[MPPTask]) -> dict[int, tuple[int, ...]]:
+    """Возвращает UID предков от корня к непосредственному родителю."""
+    ancestors: dict[int, tuple[int, ...]] = {}
+    path: list[int] = []
+    for task in tasks:
+        while len(path) >= task.outline_level:
+            path.pop()
+        ancestors[task.uid] = tuple(path)
+        path.append(task.uid)
+    return ancestors
+
+
 def validate_snapshot(snapshot: MPPSnapshot) -> list[MPPIssue]:
     """Проверяет структуру и качество сети независимо от исходного IR."""
     issues: list[MPPIssue] = []
@@ -230,6 +242,7 @@ def validate_snapshot(snapshot: MPPSnapshot) -> list[MPPIssue]:
     uids = {task.uid for task in snapshot.tasks}
     uid_to_task = {task.uid: task for task in snapshot.tasks}
     successors: dict[int, set[int]] = {uid: set() for uid in uids}
+    ancestors = _ancestor_map(snapshot.tasks)
 
     if len(ids) != len(set(ids)):
         issues.append(MPPIssue("error", "MPP-DUPLICATE-ID",
@@ -277,30 +290,74 @@ def validate_snapshot(snapshot: MPPSnapshot) -> list[MPPIssue]:
                 successors[link.predecessor_uid].add(task.uid)
 
     leaf_tasks = [task for task in snapshot.tasks if not task.summary]
+    summary_start_coverage = 0
+    summary_finish_coverage = 0
+    reporting_milestones = 0
     for task in leaf_tasks:
         label = {"task_id": task.task_id, "task_name": task.name}
-        if not task.predecessors:
+        ancestor_tasks = [uid_to_task[uid] for uid in ancestors[task.uid]]
+        ancestor_predecessors = {
+            link.predecessor_uid for ancestor in ancestor_tasks
+            for link in ancestor.predecessors
+        }
+        ancestor_successors = {
+            successor for ancestor in ancestor_tasks
+            for successor in successors[ancestor.uid]
+        }
+        effective_predecessors = (
+            {link.predecessor_uid for link in task.predecessors} | ancestor_predecessors
+        )
+        effective_successors = successors[task.uid] | ancestor_successors
+        reporting = task.milestone and any(
+            ancestor.name == "Контрольные вехи" for ancestor in ancestor_tasks)
+
+        if not task.predecessors and effective_predecessors:
+            summary_start_coverage += 1
+        if not successors[task.uid] and effective_successors:
+            summary_finish_coverage += 1
+        if not effective_predecessors:
             issues.append(MPPIssue("warning", "MPP-OPEN-START",
                                    "У задачи нет предшественника", **label))
-        if not successors[task.uid]:
+        if not effective_successors and reporting:
+            reporting_milestones += 1
+        elif not effective_successors:
             issues.append(MPPIssue("warning", "MPP-OPEN-FINISH",
                                    "У задачи нет последователя", **label))
 
-    critical = {task.uid for task in leaf_tasks if task.critical}
-    if not critical:
+    if summary_start_coverage or summary_finish_coverage:
+        issues.append(MPPIssue(
+            "info", "MPP-SUMMARY-LINK-COVERAGE",
+            "Связями суммарных строк покрыто задач без прямых связей: "
+            f"начало — {summary_start_coverage}, окончание — {summary_finish_coverage} "
+            "(DEC-26)"))
+    if reporting_milestones:
+        issues.append(MPPIssue(
+            "info", "MPP-REPORTING-MILESTONES",
+            f"Контрольных вех без последователей: {reporting_milestones}; "
+            "это выходной контракт интеграции, а не управляющие задачи "
+            "(typGRP.md §5)"))
+
+    critical = {task.uid for task in snapshot.tasks if task.critical}
+    critical_leaves = {task.uid for task in leaf_tasks if task.critical}
+    if not critical_leaves:
         issues.append(MPPIssue("warning", "MPP-CRITICAL-EMPTY",
                                "Microsoft Project не определил критические задачи"))
     else:
-        for uid in critical:
+        for uid in critical_leaves:
             task = uid_to_task[uid]
-            critical_preds = {link.predecessor_uid for link in task.predecessors} & critical
-            critical_succs = successors[uid] & critical
-            if task.predecessors and not critical_preds:
+            ancestor_tasks = [uid_to_task[item] for item in ancestors[uid]]
+            effective_preds = {link.predecessor_uid for link in task.predecessors}
+            effective_succs = set(successors[uid])
+            for ancestor in ancestor_tasks:
+                effective_preds.update(
+                    link.predecessor_uid for link in ancestor.predecessors)
+                effective_succs.update(successors[ancestor.uid])
+            if effective_preds and not effective_preds & critical:
                 issues.append(MPPIssue(
                     "warning", "MPP-CRITICAL-GAP-IN",
                     "Критическая задача не имеет критического предшественника",
                     task.task_id, task.name))
-            if successors[uid] and not critical_succs:
+            if effective_succs and not effective_succs & critical:
                 issues.append(MPPIssue(
                     "warning", "MPP-CRITICAL-GAP-OUT",
                     "Критическая задача не имеет критического последователя",
@@ -388,14 +445,16 @@ def compare_with_ir(snapshot: MPPSnapshot, schedule: ScheduleProject) -> list[MP
 
 def report_dict(snapshot: MPPSnapshot, issues: list[MPPIssue]) -> dict:
     errors = sum(issue.severity == "error" for issue in issues)
-    warnings = len(issues) - errors
+    warnings = sum(issue.severity == "warning" for issue in issues)
+    infos = sum(issue.severity == "info" for issue in issues)
     counts: dict[str, int] = {}
     for issue in issues:
         counts[issue.code] = counts.get(issue.code, 0) + 1
     return {
         "project": {"name": snapshot.name, "start": str(snapshot.start),
                     "finish": str(snapshot.finish), "task_count": len(snapshot.tasks)},
-        "result": {"errors": errors, "warnings": warnings, "by_code": counts},
+        "result": {"errors": errors, "warnings": warnings, "infos": infos,
+                   "by_code": counts},
         "issues": [asdict(issue) for issue in issues],
     }
 
@@ -429,7 +488,8 @@ def main(argv: list[str] | None = None) -> int:
     result = report["result"]
     print(f"MPP: {snapshot.name} · задач: {len(snapshot.tasks)} · "
           f"{snapshot.start}…{snapshot.finish}")
-    print(f"Ошибок: {result['errors']} · предупреждений: {result['warnings']}")
+    print(f"Ошибок: {result['errors']} · предупреждений: {result['warnings']} · "
+          f"информационных: {result['infos']}")
     for code, count in sorted(result["by_code"].items()):
         print(f"  {code}: {count}")
     return 1 if result["errors"] else 0
