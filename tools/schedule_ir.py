@@ -252,7 +252,13 @@ def validate_schedule_ir(schedule: ScheduleProject) -> list[IRIssue]:
                                   task.task_id))
         if task.reserve_finish and task.finish and task.reserve_finish < task.finish:
             issues.append(IRIssue("IR-RESERVE", "Дата с резервом раньше расчётной", task.task_id))
+        seen_links: set[tuple[str, str, int]] = set()
         for link in task.predecessors:
+            link_key = (link.predecessor_id, link.type, link.lag_days)
+            if link_key in seen_links:
+                issues.append(IRIssue("IR-LINK-DUPLICATE", "Связь продублирована",
+                                      task.task_id))
+            seen_links.add(link_key)
             if link.type not in LINK_TYPES:
                 issues.append(IRIssue("IR-LINK-TYPE", f"Неизвестный тип связи {link.type}",
                                       task.task_id))

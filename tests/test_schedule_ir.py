@@ -78,6 +78,15 @@ def test_ir_validator_rejects_self_link():
     assert "IR-LINK-SELF" in {issue.code for issue in validate_schedule_ir(schedule)}
 
 
+def test_ir_validator_rejects_duplicate_link():
+    schedule = build_ir()
+    task = next(task for task in schedule.tasks if task.predecessors)
+    task.predecessors.append(task.predecessors[0])
+    assert "IR-LINK-DUPLICATE" in {
+        issue.code for issue in validate_schedule_ir(schedule)
+    }
+
+
 def test_cli_writes_ir_when_requested():
     out_dir = ROOT / "out"
     out_dir.mkdir(exist_ok=True)
