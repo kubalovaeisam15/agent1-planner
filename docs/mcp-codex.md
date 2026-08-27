@@ -21,23 +21,32 @@
 
 ## Подключение в Codex
 
-В настройках Codex добавьте локальный MCP-сервер типа **STDIO**:
+В проект уже добавлен `.codex/config.toml` с локальным MCP-сервером типа
+**STDIO**. Codex загружает эту конфигурацию, когда проект отмечен доверенным.
+Проверка выполняется из корня проекта:
+
+```powershell
+codex mcp list
+```
+
+В списке должен появиться включённый сервер `agent1-ms-project`. Его параметры:
 
 - имя: `agent1-ms-project`;
-- команда: `python`;
+- команда: `C:\Users\Qbal\AppData\Local\Programs\Python\Python312\python.exe`;
 - аргумент: `D:\Claude\ClaudeVS\agent1\tools\mcp_server.py`.
 
-Эквивалентный фрагмент конфигурации:
+Фрагмент проектной конфигурации:
 
 ```toml
 [mcp_servers.agent1-ms-project]
-command = "python"
+command = 'C:\Users\Qbal\AppData\Local\Programs\Python\Python312\python.exe'
 args = ['D:\Claude\ClaudeVS\agent1\tools\mcp_server.py']
 startup_timeout_sec = 10
 tool_timeout_sec = 1800
+enabled = true
 ```
 
-После сохранения конфигурации Codex нужно перезапустить. Для первой проверки
+После изменения конфигурации Codex нужно перезапустить. Для первой проверки
 попросите агента вызвать `schedule_summary` для существующего IR, затем
 `schedule_validate_ir`. Запись MPP следует проверять отдельно на новом имени
 файла, после чего запускать `mpp_validate` со ссылкой на исходный IR.

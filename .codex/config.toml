@@ -1,0 +1,6 @@
+[mcp_servers.agent1-ms-project]
+command = 'C:\Users\Qbal\AppData\Local\Programs\Python\Python312\python.exe'
+args = ['D:\Claude\ClaudeVS\agent1\tools\mcp_server.py']
+startup_timeout_sec = 10
+tool_timeout_sec = 1800
+enabled = true
