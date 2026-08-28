@@ -41,6 +41,16 @@ function Get-CustomFields($application) {
     return $items
 }
 
+function Get-CollectionNames($collection) {
+    $names = @()
+    if ($null -eq $collection) { return $names }
+    foreach ($item in $collection) {
+        if ($null -eq $item) { continue }
+        try { $names += [string]$item.Name } catch { $names += [string]$item }
+    }
+    return @($names | Sort-Object -Unique)
+}
+
 $projectApp = $null
 try {
     $projectApp = New-Object -ComObject MSProject.Application
@@ -56,11 +66,28 @@ try {
     foreach ($calendar in $project.BaseCalendars) {
         if ($null -ne $calendar) { $calendars += [string]$calendar.Name }
     }
+    $views = @(Get-CollectionNames $project.Views)
+    $taskTables = @(Get-CollectionNames $project.TaskTables)
+    $resourceTables = @(Get-CollectionNames $project.ResourceTables)
+    $taskFilters = @(Get-CollectionNames $project.TaskFilters)
+    $resourceFilters = @(Get-CollectionNames $project.ResourceFilters)
+    $taskGroups = @(Get-CollectionNames $project.TaskGroups)
+    $resourceGroups = @(Get-CollectionNames $project.ResourceGroups)
+    $reports = @()
+    try { $reports = @(Get-CollectionNames $project.Reports) } catch { }
     [ordered]@{
         mpp = $mppPath
         task_count = [int]$project.Tasks.Count
         calendars = $calendars
         custom_fields = @(Get-CustomFields $projectApp)
+        views = $views
+        task_tables = $taskTables
+        resource_tables = $resourceTables
+        task_filters = $taskFilters
+        resource_filters = $resourceFilters
+        task_groups = $taskGroups
+        resource_groups = $resourceGroups
+        reports = $reports
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
 }
 finally {

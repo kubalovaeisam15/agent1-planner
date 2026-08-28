@@ -14,18 +14,10 @@ $mppPath = [System.IO.Path]::GetFullPath($OutputMpp)
 $reportPath = [System.IO.Path]::GetFullPath($ReportJson)
 $durationsPath = [System.IO.Path]::GetFullPath($DurationsJson)
 
-if (-not [System.IO.File]::Exists($xmlPath)) {
-    throw "Input XML not found: $xmlPath"
+foreach ($requiredFile in @($xmlPath, $templatePath, $durationsPath)) {
+    if (-not [System.IO.File]::Exists($requiredFile)) { throw "Required file not found: $requiredFile" }
 }
-if (-not [System.IO.File]::Exists($templatePath)) {
-    throw "Template MPP not found: $templatePath"
-}
-if ([System.IO.File]::Exists($mppPath)) {
-    throw "Refusing to overwrite existing MPP: $mppPath"
-}
-if (-not [System.IO.File]::Exists($durationsPath)) {
-    throw "Duration overrides not found: $durationsPath"
-}
+if ([System.IO.File]::Exists($mppPath)) { throw "Refusing to overwrite existing MPP: $mppPath" }
 
 function Get-CustomFields($application) {
     $families = @(
@@ -59,60 +51,102 @@ function Get-CustomFields($application) {
     return $items
 }
 
+function Get-CollectionNames($collection) {
+    $names = @()
+    if ($null -eq $collection) { return $names }
+    foreach ($item in $collection) {
+        if ($null -eq $item) { continue }
+        try { $names += [string]$item.Name } catch { $names += [string]$item }
+    }
+    return @($names | Sort-Object -Unique)
+}
+
+function Get-CorporateObjects($project) {
+    $reports = @()
+    try { $reports = @(Get-CollectionNames $project.Reports) } catch { }
+    return [ordered]@{
+        views = @(Get-CollectionNames $project.Views)
+        task_tables = @(Get-CollectionNames $project.TaskTables)
+        resource_tables = @(Get-CollectionNames $project.ResourceTables)
+        task_filters = @(Get-CollectionNames $project.TaskFilters)
+        resource_filters = @(Get-CollectionNames $project.ResourceFilters)
+        task_groups = @(Get-CollectionNames $project.TaskGroups)
+        resource_groups = @(Get-CollectionNames $project.ResourceGroups)
+        reports = $reports
+    }
+}
+
 $projectApp = $null
 $exportSucceeded = $false
-$templateWorkPath = Join-Path ([System.IO.Path]::GetDirectoryName($mppPath)) `
-    ("agent1-template-" + [guid]::NewGuid().ToString("N") + ".mpp")
 try {
-    # OrganizerMoveItem is applied to a disposable copy, so the corporate
-    # source file cannot be changed even if a Project version implements
-    # "move" literally rather than as the Organizer's usual copy operation.
-    [System.IO.File]::Copy($templatePath, $templateWorkPath, $false)
+    # The output starts as an exact copy of the corporate MPP. This preserves
+    # all local views, tables, filters, groups, reports, fields and calendars.
+    [System.IO.File]::Copy($templatePath, $mppPath, $false)
 
     $projectApp = New-Object -ComObject MSProject.Application
     try { $projectApp.Visible = $false } catch { }
     try { $projectApp.DisplayAlerts = $false } catch { }
     $missing = [Type]::Missing
 
-    # Inventory corporate calendars before building the calculated project.
     $projectApp.FileOpenEx(
-        $templateWorkPath, $true, $missing, $missing, $missing, $missing, $true
+        $mppPath, $false, $missing, $missing, $missing, $missing, $true
     ) | Out-Null
-    $templateProject = $projectApp.ActiveProject
-    if ($null -eq $templateProject) { throw "MS Project did not open the template" }
-    $templateTaskCount = [int]$templateProject.Tasks.Count
+    $project = $projectApp.ActiveProject
+    if ($null -eq $project) { throw "MS Project did not open the corporate template copy" }
+
+    $templateTaskCount = [int]$project.Tasks.Count
     $templateCalendars = @()
-    foreach ($calendar in $templateProject.BaseCalendars) {
+    foreach ($calendar in $project.BaseCalendars) {
         if ($null -ne $calendar) { $templateCalendars += [string]$calendar.Name }
     }
     $templateCustomFields = @(Get-CustomFields $projectApp)
+    $templateCorporateObjects = Get-CorporateObjects $project
+    $templateWindowName = [string]$project.Name
 
-    # MSPDI remains the schedule transport because it preserves the generated
-    # hierarchy, links and elapsed-day lags exactly.
+    # Remove only task rows. Project-level corporate objects stay in the MPP.
+    while ($project.Tasks.Count -gt 0) {
+        $firstTask = $project.Tasks.Item(1)
+        if ($null -eq $firstTask) { throw "Unable to delete the first template task" }
+        $firstTask.Delete()
+    }
+
+    # This Project build rejects XMLDOM merge through FileOpenEx. Import the
+    # calculated schedule in a second Project window and transfer all task
+    # rows into the still-open corporate template copy instead.
+    $placeholder = $project.Tasks.Add("__AGENT1_IMPORT_TARGET__")
     $xmlText = [System.IO.File]::ReadAllText($xmlPath, [System.Text.Encoding]::UTF8)
     $openResult = $projectApp.OpenXML($xmlText)
     if ($openResult -ne 0) { throw "MS Project OpenXML returned $openResult" }
-    $project = $projectApp.ActiveProject
-    if ($null -eq $project) { throw "MS Project did not create an active project" }
+    $importProject = $projectApp.ActiveProject
+    if ($null -eq $importProject) { throw "MS Project did not open the MSPDI schedule" }
 
-    # Project 2021 preserves the imported hierarchy and links but can replace
-    # MSPDI durations with zero. Assigning the same values through the native
-    # COM property makes Project retain and calculate them reliably.
-    $durationOverrides = Get-Content -LiteralPath $durationsPath -Raw -Encoding UTF8 |
-        ConvertFrom-Json
+    $projectApp.SelectAll() | Out-Null
+    $projectApp.EditCopy() | Out-Null
+    $projectApp.WindowActivate($templateWindowName) | Out-Null
+    $project = $projectApp.ActiveProject
+    if ($null -eq $project) { throw "MS Project could not reactivate the corporate template copy" }
+    $projectApp.SelectRow(1, $false) | Out-Null
+    $projectApp.EditPaste() | Out-Null
+
+    foreach ($candidate in @($project.Tasks)) {
+        if ($null -ne $candidate -and [string]$candidate.Name -eq "__AGENT1_IMPORT_TARGET__") {
+            $candidate.Delete()
+            break
+        }
+    }
+
+    # Project 2021 can import valid MSPDI durations as zero. Reapply the same
+    # values natively, then let Project calculate the resulting schedule.
+    $durationOverrides = Get-Content -LiteralPath $durationsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $durationOverrideCount = 0
     $durationMismatchCount = 0
     foreach ($entry in $durationOverrides) {
         $task = $project.Tasks.Item([int]$entry.id)
-        if ($null -eq $task) {
-            throw "Task for duration override not found: $($entry.id)"
-        }
+        if ($null -eq $task) { throw "Task for duration override not found: $($entry.id)" }
         $expectedDuration = [double]$entry.duration_minutes
         $task.Duration = $expectedDuration
         $durationOverrideCount += 1
-        if ([Math]::Abs(([double]$task.Duration) - $expectedDuration) -gt 0.01) {
-            $durationMismatchCount += 1
-        }
+        if ([Math]::Abs(([double]$task.Duration) - $expectedDuration) -gt 0.01) { $durationMismatchCount += 1 }
     }
     $projectApp.CalculateProject() | Out-Null
 
@@ -125,13 +159,12 @@ try {
     foreach ($sampleId in $sampleIds.Keys) {
         $task = $project.Tasks.Item([int]$sampleId)
         if ($null -ne $task) {
-            $taskFinish = [datetime]$task.Finish
             $samples += [ordered]@{
                 id = [int]$task.ID
                 name = [string]$task.Name
                 outline_level = [int]$task.OutlineLevel
                 start = ([datetime]$task.Start).ToString("yyyy-MM-dd")
-                finish = $taskFinish.ToString("yyyy-MM-dd")
+                finish = ([datetime]$task.Finish).ToString("yyyy-MM-dd")
                 duration = [string]$task.DurationText
                 duration_minutes = [double]$task.Duration
                 predecessors = [string]$task.Predecessors
@@ -140,73 +173,13 @@ try {
         }
     }
 
-    $saveResult = $projectApp.FileSaveAs($mppPath)
-    if (-not [System.IO.File]::Exists($mppPath)) {
-        throw "MS Project did not save MPP (FileSaveAs=$saveResult)"
-    }
-
-    # Project 2021 rejects the documented "copy all" mode, so corporate
-    # calendars and named custom fields are copied one by one.
-    $organizerResults = @()
-    foreach ($calendarName in $templateCalendars) {
-        try {
-            $moved = $projectApp.OrganizerMoveItem(
-                5, $templateWorkPath, $mppPath, $calendarName, $true
-            )
-        } catch {
-            throw "Organizer calendar copy failed [$calendarName]: $($_.Exception.Message)"
-        }
-        $organizerResults += [ordered]@{
-            type = 5; task_scope = $true; name = $calendarName; copied = [bool]$moved
-        }
-    }
-    foreach ($field in $templateCustomFields) {
-        $fieldType = if ($field.task_scope) { 0 } else { 1 }
-        $fieldId = $projectApp.FieldNameToFieldConstant($field.internal_name, $fieldType)
-        try {
-            $renamed = $true
-            if ($field.alias) {
-                $renamed = [bool]$projectApp.CustomFieldRename($fieldId, $field.alias)
-            }
-            $formulaSet = $true
-            if ($field.formula) {
-                $formulaSet = [bool]$projectApp.CustomFieldSetFormula($fieldId, $field.formula)
-            }
-            $moved = $renamed -and $formulaSet
-        } catch {
-            throw "Custom field copy failed [$($field.internal_name)]: $($_.Exception.Message)"
-        }
-        $organizerResults += [ordered]@{
-            type = 9
-            task_scope = [bool]$field.task_scope
-            name = $field.alias
-            internal_name = $field.internal_name
-            copied = [bool]$moved
-        }
-    }
-    $mandatoryCopies = @($organizerResults | Where-Object { -not $_.copied })
-    if ($mandatoryCopies.Count -gt 0) {
-        throw "Microsoft Project did not copy all corporate fields/calendars"
-    }
-
-    $projectApp.FileSave() | Out-Null
-
-    # Verify in the active output that the task transport and all template
-    # calendars survived the Organizer operation.
-    $project = $projectApp.ActiveProject
-    if ($null -eq $project) { throw "MS Project lost the active output MPP" }
     $outputCalendars = @()
     foreach ($calendar in $project.BaseCalendars) {
         if ($null -ne $calendar) { $outputCalendars += [string]$calendar.Name }
     }
     $outputCustomFields = @(Get-CustomFields $projectApp)
+    $outputCorporateObjects = Get-CorporateObjects $project
     $missingCalendars = @($templateCalendars | Where-Object { $_ -notin $outputCalendars })
-    if ($missingCalendars.Count -gt 0) {
-        throw "Corporate calendars lost during copy: $($missingCalendars -join ', ')"
-    }
-    if ([int]$project.Tasks.Count -ne $taskCount) {
-        throw "Organizer changed the task count: $($project.Tasks.Count) instead of $taskCount"
-    }
     $missingFields = @($templateCustomFields | Where-Object {
         $expected = $_
         -not ($outputCustomFields | Where-Object {
@@ -215,11 +188,28 @@ try {
             $_.alias -eq $expected.alias -and $_.formula -eq $expected.formula
         })
     })
+    if ($missingCalendars.Count -gt 0) {
+        throw "Corporate calendars lost during task replacement: $($missingCalendars -join ', ')"
+    }
     if ($missingFields.Count -gt 0) {
-        throw "Corporate custom fields lost during copy: $($missingFields.Count)"
+        throw "Corporate custom fields lost during task replacement: $($missingFields.Count)"
+    }
+    $missingCorporateObjects = [ordered]@{}
+    foreach ($category in $templateCorporateObjects.Keys) {
+        $expectedItems = @($templateCorporateObjects[$category])
+        $actualItems = @($outputCorporateObjects[$category])
+        $missingItems = @($expectedItems | Where-Object { $_ -notin $actualItems })
+        if ($missingItems.Count -gt 0) { $missingCorporateObjects[$category] = $missingItems }
+    }
+    if ($missingCorporateObjects.Count -gt 0) {
+        throw "Corporate views/tables/filters/groups lost: $($missingCorporateObjects.Keys -join ', ')"
     }
 
+    $projectApp.FileSave() | Out-Null
+    if (-not [System.IO.File]::Exists($mppPath)) { throw "MS Project did not save the output MPP" }
+
     $report = [ordered]@{
+        export_mode = "corporate-template-base-task-transfer"
         task_count = $taskCount
         duration_override_count = $durationOverrideCount
         duration_mismatch_count = $durationMismatchCount
@@ -230,11 +220,13 @@ try {
         template_task_count = $templateTaskCount
         template_calendars = $templateCalendars
         template_custom_fields = $templateCustomFields
+        template_corporate_objects = $templateCorporateObjects
         output_calendars = $outputCalendars
         output_custom_fields = $outputCustomFields
+        output_corporate_objects = $outputCorporateObjects
         missing_template_calendars = $missingCalendars
         missing_template_custom_fields = $missingFields
-        organizer_copies = $organizerResults
+        missing_template_corporate_objects = $missingCorporateObjects
         samples = $samples
         output_mpp = $mppPath
     }
@@ -249,9 +241,6 @@ finally {
     }
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
-    if ([System.IO.File]::Exists($templateWorkPath)) {
-        [System.IO.File]::Delete($templateWorkPath)
-    }
     if (-not $exportSucceeded -and [System.IO.File]::Exists($mppPath)) {
         [System.IO.File]::Delete($mppPath)
     }
