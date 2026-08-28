@@ -21,6 +21,7 @@ from schedule_ir import ScheduleProject, validate_schedule_ir
 
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = Path(__file__).with_name("project_com_bridge.ps1")
+DEFAULT_TEMPLATE = ROOT / "data" / "Шаблон ГРП.mpp"
 NS = "http://schemas.microsoft.com/project"
 ET.register_namespace("", NS)
 
@@ -198,16 +199,22 @@ def schedule_to_mspdi(schedule: ScheduleProject) -> bytes:
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
-def export_mpp(ir_path: Path, mpp_path: Path, *, timeout_seconds: int = 300) -> dict[str, Any]:
-    """Создаёт новый MPP. Существующий файл намеренно не перезаписывает."""
+def export_mpp(ir_path: Path, mpp_path: Path, *, template_path: Path = DEFAULT_TEMPLATE,
+               timeout_seconds: int = 300) -> dict[str, Any]:
+    """Создаёт новый MPP на основе корпоративного шаблона без перезаписи."""
     ir_path = ir_path.resolve()
     mpp_path = mpp_path.resolve()
+    template_path = template_path.resolve()
     if mpp_path.suffix.lower() != ".mpp":
         raise ValueError("Выходной файл должен иметь расширение .mpp")
     if mpp_path.exists():
         raise FileExistsError(f"MPP уже существует: {mpp_path}")
     if not BRIDGE.exists():
         raise FileNotFoundError(f"Не найден COM-мост: {BRIDGE}")
+    if template_path.suffix.lower() != ".mpp" or not template_path.is_file():
+        raise FileNotFoundError(f"Не найден корпоративный шаблон MPP: {template_path}")
+    if template_path == mpp_path:
+        raise ValueError("Выходной MPP не может совпадать с корпоративным шаблоном")
     mpp_path.parent.mkdir(parents=True, exist_ok=True)
 
     schedule = ScheduleProject.from_json(ir_path.read_text(encoding="utf-8"))
@@ -241,6 +248,7 @@ def export_mpp(ir_path: Path, mpp_path: Path, *, timeout_seconds: int = 300) -> 
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
             "-File", str(BRIDGE),
             "-InputXml", str(xml_path),
+            "-TemplateMpp", str(template_path),
             "-OutputMpp", str(mpp_path),
             "-ReportJson", str(report_path),
             "-DurationsJson", str(durations_path),
@@ -285,6 +293,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Создать новый MPP из Schedule IR")
     parser.add_argument("ir", type=Path, help="Schedule IR v1.0 JSON")
     parser.add_argument("mpp", type=Path, help="новый выходной .mpp")
+    parser.add_argument("--template", type=Path, default=DEFAULT_TEMPLATE,
+                        help="корпоративный шаблон .mpp")
     parser.add_argument("--timeout", type=int, default=300, help="таймаут COM, секунд")
     return parser.parse_args(argv)
 
@@ -292,7 +302,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        report = export_mpp(args.ir, args.mpp, timeout_seconds=args.timeout)
+        report = export_mpp(args.ir, args.mpp, template_path=args.template,
+                            timeout_seconds=args.timeout)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"Ошибка экспорта MPP: {exc}", file=sys.stderr)
         return 1

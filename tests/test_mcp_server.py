@@ -35,6 +35,7 @@ def test_initialize_and_tool_catalog_are_mcp_json_rpc():
     })
     assert initialized is not None
     assert initialized["result"]["serverInfo"]["name"] == "agent1-ms-project"
+    assert initialized["result"]["serverInfo"]["version"] == "0.4.0"
     assert initialized["result"]["protocolVersion"] == "2025-06-18"
 
     listed = mcp_server.handle_request({
@@ -46,6 +47,10 @@ def test_initialize_and_tool_catalog_are_mcp_json_rpc():
         "schedule_summary", "schedule_validate_ir", "schedule_build",
         "mpp_export", "mpp_validate",
     }
+    export_tool = next(tool for tool in listed["result"]["tools"]
+                       if tool["name"] == "mpp_export")
+    assert "template_path" in export_tool["inputSchema"]["properties"]
+    assert "template_path" not in export_tool["inputSchema"]["required"]
 
 
 def test_notification_has_no_response():

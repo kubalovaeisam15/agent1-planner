@@ -29,7 +29,8 @@ from schedule_ir import ScheduleProject, validate_schedule_ir
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER_NAME = "agent1-ms-project"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.4.0"
+DEFAULT_MPP_TEMPLATE = ROOT / "data" / "Шаблон ГРП.mpp"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 MAX_INLINE_ISSUES = 50
 
@@ -85,12 +86,13 @@ TOOLS = [
     {
         "name": "mpp_export",
         "description": (
-            "Создать новый MPP из проверенного Schedule IR через Microsoft Project. "
-            "Существующий MPP не перезаписывается."
+            "Создать новый MPP из проверенного Schedule IR через Microsoft Project "
+            "на основе корпоративного шаблона. Существующий MPP не перезаписывается."
         ),
         "inputSchema": _schema({
             "ir_path": PATH,
             "mpp_path": PATH,
+            "template_path": PATH,
             "timeout_seconds": TIMEOUT,
         }, ["ir_path", "mpp_path"]),
         "annotations": {"readOnlyHint": False, "destructiveHint": False,
@@ -218,8 +220,13 @@ def _mpp_export(arguments: dict[str, Any]) -> dict[str, Any]:
             "сначала вызовите schedule_validate_ir"
         )
     mpp = _path(arguments.get("mpp_path"), suffix=".mpp", exists=False)
-    report = export_mpp(ir, mpp, timeout_seconds=_timeout(arguments))
-    return {"mpp_path": str(mpp), "ir_path": str(ir), "report": report}
+    template_value = arguments.get("template_path")
+    template = (_path(template_value, suffix=".mpp") if template_value is not None
+                else DEFAULT_MPP_TEMPLATE)
+    report = export_mpp(ir, mpp, template_path=template,
+                        timeout_seconds=_timeout(arguments))
+    return {"mpp_path": str(mpp), "ir_path": str(ir),
+            "template_path": str(template), "report": report}
 
 
 def _mpp_validate(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -299,7 +306,8 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
                 "instructions": (
                     "Инструменты работают только с файлами внутри agent1. Сначала стройте или "
                     "проверяйте Schedule IR, затем создавайте новый MPP. Экспорт не перезаписывает "
-                    "файлы. mpp_validate открывает MPP только для чтения и закрывает без сохранения."
+                    "файлы и по умолчанию использует data/Шаблон ГРП.mpp. mpp_validate открывает "
+                    "MPP только для чтения и закрывает без сохранения."
                 ),
             }
         elif method == "ping":
