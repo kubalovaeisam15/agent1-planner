@@ -38,7 +38,7 @@ XML = """<?xml version="1.0" encoding="utf-8"?>
       <Start>2026-01-06T00:00:00</Start><Finish>2026-01-06T00:00:00</Finish>
       <Duration>PT0H0M0S</Duration><Summary>0</Summary><Milestone>1</Milestone>
       <PercentComplete>0</PercentComplete><Critical>1</Critical><TotalSlack>0</TotalSlack>
-      <ConstraintType>0</ConstraintType><Deadline>2026-01-10T00:00:00</Deadline>
+      <ConstraintType>0</ConstraintType>
       <PredecessorLink><PredecessorUID>2</PredecessorUID><Type>1</Type>
         <LinkLag>0</LinkLag><LagFormat>8</LagFormat></PredecessorLink>
     </Task>
@@ -82,6 +82,19 @@ def test_validator_detects_negative_slack(tmp_path: Path):
                                 "<TotalSlack>-1440</TotalSlack>", 1), encoding="utf-8")
     snapshot = parse_mspdi(path)
     assert "MPP-NEGATIVE-SLACK" in {issue.code for issue in validate_snapshot(snapshot)}
+
+
+def test_ir_comparison_rejects_deadlines_used_for_dec31_reserve(tmp_path: Path):
+    path = tmp_path / "snapshot-with-deadline.xml"
+    payload = XML.replace(
+        "<PredecessorLink>",
+        "<Deadline>2026-01-10T00:00:00</Deadline><PredecessorLink>",
+        1,
+    )
+    path.write_text(payload, encoding="utf-8")
+    issues = compare_with_ir(parse_mspdi(path), schedule())
+    deadline = next(issue for issue in issues if issue.code == "MPP-IR-DEADLINES")
+    assert deadline.severity == "error"
 
 
 def mpp_task(uid: int, name: str, level: int, *, summary: bool = False,

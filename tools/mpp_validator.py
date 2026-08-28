@@ -369,6 +369,7 @@ def compare_with_ir(snapshot: MPPSnapshot, schedule: ScheduleProject) -> list[MP
     """Сверяет MPP с исходным Schedule IR по задачам, датам и связям."""
     issues: list[MPPIssue] = []
     critical_mismatches = 0
+    deadline_count = 0
     if len(snapshot.tasks) != len(schedule.tasks):
         issues.append(MPPIssue(
             "error", "MPP-IR-TASK-COUNT",
@@ -417,11 +418,11 @@ def compare_with_ir(snapshot: MPPSnapshot, schedule: ScheduleProject) -> list[MP
                 "error", "MPP-IR-DATES",
                 f"Даты {task.start}…{task.finish}, в IR {ir_task.start}…{ir_task.finish}",
                 **label))
-        if task.deadline != ir_task.reserve_finish:
-            issues.append(MPPIssue(
-                "error", "MPP-IR-DEADLINE",
-                f"Дедлайн {task.deadline}, в IR {ir_task.reserve_finish}", **label))
-        if task.critical != ir_task.critical:
+        if task.deadline is not None:
+            deadline_count += 1
+        # Критичность суммарных строк Project вычисляет самостоятельно и она
+        # не входит в контракт IR; сравниваются только задачи и вехи.
+        if ir_task.task_type != "summary" and task.critical != ir_task.critical:
             critical_mismatches += 1
 
         expected_links = {
@@ -435,6 +436,11 @@ def compare_with_ir(snapshot: MPPSnapshot, schedule: ScheduleProject) -> list[MP
         if actual_links != expected_links:
             issues.append(MPPIssue("error", "MPP-IR-LINKS",
                                    "Набор связей не совпадает с IR", **label))
+    if deadline_count:
+        issues.append(MPPIssue(
+            "error", "MPP-IR-DEADLINES",
+            f"В MPP заданы дедлайны у {deadline_count} задач. Резерв DEC-31 "
+            "не импортируется в Project и не должен влиять на критический путь"))
     if critical_mismatches:
         issues.append(MPPIssue(
             "warning", "MPP-IR-CRITICAL",

@@ -27,7 +27,7 @@ def sample_schedule() -> ScheduleProject:
     )
 
 
-def test_mspdi_preserves_wbs_elapsed_duration_link_and_deadline():
+def test_mspdi_preserves_wbs_elapsed_duration_and_link_without_reserve_deadline():
     root = ET.fromstring(schedule_to_mspdi(sample_schedule()))
     ns = {"p": NS}
     tasks = root.findall("p:Tasks/p:Task", ns)
@@ -40,7 +40,7 @@ def test_mspdi_preserves_wbs_elapsed_duration_link_and_deadline():
     assert work.findtext("p:ActualDuration", namespaces=ns) == "PT0H0M0S"
     assert work.findtext("p:RemainingDuration", namespaces=ns) == "P5D"
     assert milestone.findtext("p:Milestone", namespaces=ns) == "1"
-    assert milestone.findtext("p:Deadline", namespaces=ns) == "2026-01-10T00:00:00"
+    assert milestone.find("p:Deadline", ns) is None  # DEC-31 не импортируется в Project
     link = milestone.find("p:PredecessorLink", ns)
     assert link is not None
     assert link.findtext("p:Type", namespaces=ns) == "1"  # FS

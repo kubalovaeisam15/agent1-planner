@@ -29,7 +29,7 @@ from schedule_ir import ScheduleProject, validate_schedule_ir
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER_NAME = "agent1-ms-project"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 MAX_INLINE_ISSUES = 50
 

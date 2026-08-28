@@ -13,8 +13,8 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any
+from uuid import uuid4
 from xml.etree import ElementTree as ET
 
 from schedule_ir import ScheduleProject, validate_schedule_ir
@@ -174,8 +174,10 @@ def schedule_to_mspdi(schedule: ScheduleProject) -> bytes:
         else:
             _add(node, "ConstraintType", 0)
             _add(node, "CalendarUID", 1)
-        if task.reserve_finish:
-            _add(node, "Deadline", _dt(task.reserve_finish))
+        # DEC-31 — аналитическая надстройка Excel/IR. В Deadline её переносить
+        # нельзя: Microsoft Project включает дедлайны в расчёт общего резерва
+        # и тем самым меняет критический путь. typGRP.md §2 прямо исключает
+        # колонку «Окончание с резервом» из импорта в Project.
         notes = task.notes
         trace = [f"Schedule IR task_id: {task.task_id}"]
         if task.source_key:
@@ -214,17 +216,17 @@ def export_mpp(ir_path: Path, mpp_path: Path, *, timeout_seconds: int = 300) -> 
         default=schedule.project_start,
     )
     xml = schedule_to_mspdi(schedule)
-    with TemporaryDirectory(prefix="agent1-mpp-", dir=mpp_path.parent) as temp_dir:
-        temp = Path(temp_dir)
-        xml_path = temp / "schedule.xml"
-        durations_path = temp / "durations.json"
-        report_path = temp / "report.json"
+    duration_overrides = [
+        {"id": index, "duration_minutes": task.duration_days * 24 * 60}
+        for index, task in enumerate(schedule.tasks, start=1)
+        if task.task_type != "summary" and task.duration_days is not None
+    ]
+    token = uuid4().hex
+    xml_path = mpp_path.parent / f".agent1-mpp-{token}.xml"
+    durations_path = mpp_path.parent / f".agent1-mpp-{token}.durations.json"
+    report_path = mpp_path.parent / f".agent1-mpp-{token}.report.json"
+    try:
         xml_path.write_bytes(xml)
-        duration_overrides = [
-            {"id": index, "duration_minutes": task.duration_days * 24 * 60}
-            for index, task in enumerate(schedule.tasks, start=1)
-            if task.task_type != "summary" and task.duration_days is not None
-        ]
         durations_path.write_text(
             json.dumps(duration_overrides, ensure_ascii=False), encoding="utf-8")
         sample_names = {
@@ -254,6 +256,10 @@ def export_mpp(ir_path: Path, mpp_path: Path, *, timeout_seconds: int = 300) -> 
         if not report_path.exists():
             raise RuntimeError("COM-мост не создал отчёт проверки")
         report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    finally:
+        xml_path.unlink(missing_ok=True)
+        durations_path.unlink(missing_ok=True)
+        report_path.unlink(missing_ok=True)
     if report.get("task_count") != len(schedule.tasks):
         raise RuntimeError(
             f"MPP содержит {report.get('task_count')} задач вместо {len(schedule.tasks)}")
