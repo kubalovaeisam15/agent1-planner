@@ -284,6 +284,34 @@ class Build:
         expand("Тендер номинация Арматурный каркас сваи", self.NOMINATION_SHORT,
                "Арматурный каркас сваи")
 
+        # typGRP.md §8.1 / §9: every tender entry milestone «РД ВПР» must be
+        # driven by the issued-RD milestone for its work package. The source
+        # template left two tender entries at the project start.
+        pile_entry = self.one("РД ВПР Свайное основание")
+        cage_entry = self.one("РД ВПР номинация Арматурный каркас сваи")
+        if pile_entry is not None and cage_entry is not None:
+            self.rows[cage_entry]["links"] = list(self.rows[pile_entry]["links"])
+            self.rows[cage_entry]["src"] = (
+                "восстановлено по РД свайного основания, typGRP.md §8.1 / §9.1а")
+
+        stained_entry = self.one("РД ВПР Витражи")
+        stained_tz = self.one("Подготовка ТЗ Витражи")
+        if stained_entry is not None and stained_tz is not None:
+            external_links = list(self.rows[stained_tz]["links"])
+            self.rows[stained_entry]["links"] = external_links
+            entry_link = (self.rows[stained_entry]["key"], "ОН", 0)
+            self.rows[stained_tz]["links"] = list(dict.fromkeys(
+                external_links + [entry_link]))
+            self.rows[stained_entry]["src"] = (
+                "восстановлено по ТЗ витражей, typGRP.md §8.1 / §9.1")
+
+        self.note("typGRP.md §8.1 / §9.1 / §9.1а",
+                  "Восстановлены два отсутствовавших входа тендерных цепочек: «РД ВПР "
+                  "номинация Арматурный каркас сваи» привязана к вехам РД свайного "
+                  "основания; «РД ВПР Витражи» получила те же внешние вехи РД, что и ТЗ "
+                  "витражей, а ТЗ дополнительно связано с входной вехой. Это устраняет "
+                  "старт тендеров от даты начала проекта.")
+
         self.note("typGRP.md §13 расх. 1",
                   "Нумерация Ид. шаблона содержала разрыв (640–644) и в выдачу не перенесена: "
                   "Ид. присвоены заново сквозным рядом, все ссылки пересчитаны.")

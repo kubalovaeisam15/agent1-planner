@@ -57,6 +57,29 @@ def test_ir_preserves_wbs_phase_and_source_identity():
     assert "К1. По договору Отопление (все система полностью)" not in predecessor_names
 
 
+def test_tender_entry_milestones_are_driven_by_issued_rd():
+    schedule = build_ir()
+    by_id = {task.task_id: task for task in schedule.tasks}
+
+    def task(name: str):
+        return next(item for item in schedule.tasks if item.name == name)
+
+    def predecessor_names(name: str) -> set[str]:
+        return {by_id[link.predecessor_id].name for link in task(name).predecessors}
+
+    assert predecessor_names("РД ВПР номинация Арматурный каркас сваи") == \
+        predecessor_names("РД ВПР Свайное основание")
+
+    stained_entry = task("РД ВПР Витражи")
+    stained_tz = task("Подготовка ТЗ Витражи")
+    entry_predecessors = predecessor_names(stained_entry.name)
+    assert entry_predecessors == {
+        "Рабочая документация выдана в производство работ АР остекление типовых этажей",
+        "Рабочая документация выдана в производство работ АР остекление первых этажей",
+    }
+    assert stained_entry.name in predecessor_names(stained_tz.name)
+
+
 def test_ir_json_round_trip_is_lossless():
     schedule = build_ir()
     payload = schedule.to_dict()
