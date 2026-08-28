@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "profile": "agent1-grp-2026-08-25",
+  "agent_policy_version": "7.5",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "version": "7.5",
+      "version_marker": "Версия файла: 7.5",
+      "sha256": "643115FE5A2D5C77A7CBBA3B9EB0B5BA15548DB9B14C8A9A287F86C0EA0AF21D"
+    },
+    {
+      "path": "CLAUDE.md",
+      "version": "7.5",
+      "version_marker": "Версия файла: 7.5",
+      "sha256": "F536BC71CF2BD91CC0289832F2BE4042C81FBD35C0E5ED41175C271D77D120E4"
+    },
+    {
+      "path": "instructions/agent-policy-full.md",
+      "version": "7.4",
+      "version_marker": "Версия файла: 7.4",
+      "sha256": "E0E6D1AA9EE0269C35F29A02D622D254568CE73865CB21DB7D3E8F50EF9BB92F"
+    },
+    {
+      "path": "instructions/typGRP.md",
+      "version": "4.3",
+      "version_marker": "Версия v4.3",
+      "sha256": "5E3CD0CFCDDECDE9630898A37A56AEB2D85CD270F9A33288D530F461CFB69A05"
+    },
+    {
+      "path": "instructions/bindings.md",
+      "version": "3.2",
+      "version_marker": "Версия v3.2",
+      "sha256": "C69FCFB933F5A200BA77FA04A7B00E669778EEBD322DEF49E049AEB46FFAF8A4"
+    },
+    {
+      "path": "instructions/standards.md",
+      "version": "3.3",
+      "version_marker": "Версия 3.3",
+      "sha256": "F05753A97CFF4A4087DAC6BEDA41AEC087E89A4864CD499B16F27CBBCA896607"
+    },
+    {
+      "path": "tools/grp_model.py",
+      "version": "compiled-rules",
+      "sha256": "F66C6C67287933999DD081A974743409F502C61FC39ABFE44A2E1DFCC7AC6BA6"
+    },
+    {
+      "path": "tools/build_grp.py",
+      "version": "generator",
+      "sha256": "AE82C33ACE4DCC266EAF9886A59E4AE834784CB9029A907B1C81DE3D101A3CEB"
+    },
+    {
+      "path": "tests/project.template.json",
+      "version": "input-contract",
+      "sha256": "F48E6E39932EAF16ED3CB93A1290FAF83114FBE4B3637ADDC8D481236C96B1F7"
+    },
+    {
+      "path": "tests/template_parsed.json",
+      "version": "wbs-skeleton",
+      "sha256": "7A4EBD5E30C432041B7D14A7DA6509BBDC8085B43A3718DF96CAB97279BEA37B"
+    },
+    {
+      "path": "data/Шаблон ГРП.mpp",
+      "version": "corporate-template",
+      "sha256": "561B807E40836D7E3307C81B8E75D5819A0E7C78BDF3640AAD003114884D8543"
+    }
+  ]
+}

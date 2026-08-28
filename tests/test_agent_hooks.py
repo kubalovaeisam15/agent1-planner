@@ -27,7 +27,7 @@ class AgentHookTests(unittest.TestCase):
     def test_session_start_reports_ready_context(self):
         result = run_hook({"hook_event_name": "SessionStart"})
         context = result["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("комплект версий", context)
+        self.assertIn("context_preflight", context)
         self.assertIn("Шаблон ГРП.mpp", context)
 
     def test_export_to_corporate_template_is_denied(self):

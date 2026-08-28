@@ -16,7 +16,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 CORPORATE_TEMPLATE = (ROOT / "data" / "Шаблон ГРП.mpp").resolve()
 EXPECTED = {
-    "AGENTS.md": "Версия файла: 7.4",
+    "AGENTS.md": "Версия файла: 7.5",
     "instructions/typGRP.md": "v4.3",
     "instructions/bindings.md": "v3.2",
     "instructions/standards.md": "Версия 3.3",
@@ -73,9 +73,9 @@ def _session_start() -> dict[str, Any]:
             + ". Не начинай расчёт или экспорт до устранения проблемы."
         )
     return _output_context(
-        "MS Project Agent: комплект версий 7.4/4.3/3.2/3.3 найден. "
-        "Перед каждым расчётом полностью загрузи typGRP.md, bindings.md и standards.md. "
-        "Для MPP используй только data/Шаблон ГРП.mpp, записывай новый файл и после экспорта вызывай mpp_validate."
+        "MS Project Agent: базовые версии найдены. Перед расчётом вызови context_preflight; "
+        "полные нормативы загружай только для разбора конкретного правила или конфликта. "
+        "MPP создавай из data/Шаблон ГРП.mpp и затем вызывай mpp_validate."
     )
 
 

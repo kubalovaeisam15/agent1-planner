@@ -13,6 +13,8 @@ $requiredFiles = @(
     "instructions/typGRP.md",
     "instructions/bindings.md",
     "instructions/standards.md",
+    "instructions/context-manifest.json",
+    "instructions/agent-policy-full.md",
     "tools/mcp_server.py",
     "tools/mspdi_adapter.py",
     "tools/mpp_validator.py",

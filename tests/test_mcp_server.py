@@ -35,7 +35,7 @@ def test_initialize_and_tool_catalog_are_mcp_json_rpc():
     })
     assert initialized is not None
     assert initialized["result"]["serverInfo"]["name"] == "agent1-ms-project"
-    assert initialized["result"]["serverInfo"]["version"] == "0.4.0"
+    assert initialized["result"]["serverInfo"]["version"] == "0.5.0"
     assert initialized["result"]["protocolVersion"] == "2025-06-18"
 
     listed = mcp_server.handle_request({
@@ -44,6 +44,7 @@ def test_initialize_and_tool_catalog_are_mcp_json_rpc():
     assert listed is not None
     names = {tool["name"] for tool in listed["result"]["tools"]}
     assert names == {
+        "context_preflight",
         "schedule_summary", "schedule_validate_ir", "schedule_build",
         "mpp_export", "mpp_validate",
     }
@@ -51,6 +52,44 @@ def test_initialize_and_tool_catalog_are_mcp_json_rpc():
                        if tool["name"] == "mpp_export")
     assert "template_path" in export_tool["inputSchema"]["properties"]
     assert "template_path" not in export_tool["inputSchema"]["required"]
+
+
+def test_context_preflight_verifies_compiled_context():
+    result = mcp_server.call_tool("context_preflight", {})
+    assert result["isError"] is False
+    content = result["structuredContent"]
+    assert content["ready"] is True
+    assert content["agent_policy_version"] == "7.5"
+    assert content["issue_count"] == 0
+    assert len(content["verified"]) == 11
+    assert all(item["verified"] for item in content["verified"])
+    assert content["template_path"].endswith("Шаблон ГРП.mpp")
+
+
+def test_context_preflight_detects_hash_mismatch(tmp_path, monkeypatch):
+    manifest = json.loads(mcp_server.CONTEXT_MANIFEST.read_text(encoding="utf-8"))
+    manifest["files"][0]["sha256"] = "0" * 64
+    changed = tmp_path / "context-manifest.json"
+    changed.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "CONTEXT_MANIFEST", changed)
+
+    result = mcp_server.call_tool("context_preflight", {})["structuredContent"]
+    assert result["ready"] is False
+    assert result["issue_count"] == 1
+    assert result["issues"][0]["code"] == "HASH_MISMATCH"
+
+    token = uuid4().hex
+    xlsx = ROOT / "out" / f"blocked-{token}.xlsx"
+    ir = ROOT / "out" / f"blocked-{token}.json"
+    blocked = mcp_server.call_tool("schedule_build", {
+        "spec_path": "tests/etalon_project.json",
+        "xlsx_path": str(xlsx.relative_to(ROOT)),
+        "ir_path": str(ir.relative_to(ROOT)),
+    })
+    assert blocked["isError"] is True
+    assert "context_preflight" in blocked["structuredContent"]["error"]
+    assert not xlsx.exists()
+    assert not ir.exists()
 
 
 def test_notification_has_no_response():
@@ -119,4 +158,4 @@ def test_stdio_transport_emits_only_json_lines():
     responses = [json.loads(line) for line in completed.stdout.splitlines()]
     assert [response["id"] for response in responses] == [1, 2, 3]
     assert all(response["jsonrpc"] == "2.0" for response in responses)
-    assert "проверяйте Schedule IR" in responses[0]["result"]["instructions"]
+    assert "context_preflight" in responses[0]["result"]["instructions"]

@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import subprocess
@@ -29,10 +30,14 @@ from schedule_ir import ScheduleProject, validate_schedule_ir
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER_NAME = "agent1-ms-project"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.5.0"
 DEFAULT_MPP_TEMPLATE = ROOT / "data" / "Шаблон ГРП.mpp"
+CONTEXT_MANIFEST = ROOT / "instructions" / "context-manifest.json"
+EXPECTED_CONTEXT_SCHEMA = 1
+EXPECTED_CONTEXT_PROFILE = "agent1-grp-2026-08-25"
+EXPECTED_AGENT_POLICY_VERSION = "7.5"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
-MAX_INLINE_ISSUES = 50
+MAX_INLINE_ISSUES = 10
 
 
 class ToolError(Exception):
@@ -55,6 +60,13 @@ TIMEOUT = {
 }
 
 TOOLS = [
+    {
+        "name": "context_preflight",
+        "description": "Проверить версии и хэши нормативов, расчётного ядра и корпоративного MPP-шаблона.",
+        "inputSchema": _schema({}, []),
+        "annotations": {"readOnlyHint": True, "destructiveHint": False,
+                        "idempotentHint": True, "openWorldHint": False},
+    },
     {
         "name": "schedule_summary",
         "description": "Прочитать Schedule IR JSON и вернуть компактную сводку без изменений файлов.",
@@ -152,6 +164,101 @@ def _load_ir(path_value: Any) -> tuple[Path, ScheduleProject]:
     return path, schedule
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().upper()
+
+
+def _context_preflight(arguments: dict[str, Any]) -> dict[str, Any]:
+    try:
+        manifest = json.loads(CONTEXT_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ToolError(f"Не читается манифест контекста: {exc}") from exc
+
+    issues: list[dict[str, str]] = []
+    verified: list[dict[str, Any]] = []
+    expected_header = {
+        "schema_version": EXPECTED_CONTEXT_SCHEMA,
+        "profile": EXPECTED_CONTEXT_PROFILE,
+        "agent_policy_version": EXPECTED_AGENT_POLICY_VERSION,
+    }
+    for key, expected in expected_header.items():
+        if manifest.get(key) != expected:
+            issues.append({
+                "code": "MANIFEST_HEADER", "path": "instructions/context-manifest.json",
+                "message": f"{key}={manifest.get(key)!r}, ожидалось {expected!r}",
+            })
+    entries = manifest.get("files")
+    if not isinstance(entries, list):
+        raise ToolError("Некорректный context-manifest.json: files должен быть массивом")
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            issues.append({"code": "MANIFEST_ENTRY", "message": "Некорректная запись files"})
+            continue
+        relative = entry.get("path")
+        try:
+            path = _path(relative)
+        except ToolError as exc:
+            issues.append({"code": "FILE_MISSING", "path": str(relative), "message": str(exc)})
+            continue
+        actual_hash = _sha256(path)
+        expected_hash = str(entry.get("sha256", "")).upper()
+        entry_ok = actual_hash == expected_hash
+        if actual_hash != expected_hash:
+            issues.append({
+                "code": "HASH_MISMATCH", "path": str(relative),
+                "message": f"SHA256 {actual_hash}, ожидался {expected_hash}",
+            })
+        marker = entry.get("version_marker")
+        if marker:
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                issues.append({"code": "READ_ERROR", "path": str(relative), "message": str(exc)})
+            else:
+                if str(marker) not in text:
+                    entry_ok = False
+                    issues.append({
+                        "code": "VERSION_MISMATCH", "path": str(relative),
+                        "message": f"не найден маркер {marker}",
+                    })
+        verified.append({
+            "path": str(relative), "version": entry.get("version"),
+            "verified": entry_ok,
+        })
+
+    templates = sorted((ROOT / "data").glob("*.mpp"))
+    if templates != [DEFAULT_MPP_TEMPLATE]:
+        issues.append({
+            "code": "TEMPLATE_SET",
+            "message": "В data должен быть ровно один корпоративный Шаблон ГРП.mpp",
+        })
+    return {
+        "ready": not issues,
+        "profile": manifest.get("profile"),
+        "agent_policy_version": manifest.get("agent_policy_version"),
+        "verified": verified,
+        "issue_count": len(issues),
+        "issues": issues[:MAX_INLINE_ISSUES],
+        "issues_truncated": len(issues) > MAX_INLINE_ISSUES,
+        "template_path": str(DEFAULT_MPP_TEMPLATE),
+    }
+
+
+def _require_context_ready() -> None:
+    preflight = _context_preflight({})
+    if not preflight["ready"]:
+        first = preflight["issues"][0]["message"] if preflight["issues"] else "неизвестная ошибка"
+        raise ToolError(
+            f"Операция остановлена: context_preflight обнаружил "
+            f"{preflight['issue_count']} ошибок. Первая: {first}"
+        )
+
+
 def _summary(schedule: ScheduleProject) -> dict[str, Any]:
     types = Counter(task.task_type for task in schedule.tasks)
     links = sum(len(task.predecessors) for task in schedule.tasks)
@@ -190,6 +297,7 @@ def _schedule_validate_ir(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _schedule_build(arguments: dict[str, Any]) -> dict[str, Any]:
+    _require_context_ready()
     spec = _path(arguments.get("spec_path"), suffix=".json")
     xlsx = _path(arguments.get("xlsx_path"), suffix=".xlsx", exists=False)
     ir = _path(arguments.get("ir_path"), suffix=".json", exists=False)
@@ -207,11 +315,14 @@ def _schedule_build(arguments: dict[str, Any]) -> dict[str, Any]:
         "ir_path": str(ir),
         "ir_valid": not issues,
         "ir_issue_count": len(issues),
+        "ir_issues": [asdict(issue) for issue in issues[:MAX_INLINE_ISSUES]],
+        "ir_issues_truncated": len(issues) > MAX_INLINE_ISSUES,
         "summary": _summary(schedule),
     }
 
 
 def _mpp_export(arguments: dict[str, Any]) -> dict[str, Any]:
+    _require_context_ready()
     ir, schedule = _load_ir(arguments.get("ir_path"))
     issues = validate_schedule_ir(schedule)
     if issues:
@@ -258,6 +369,7 @@ def _mpp_validate(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "context_preflight": _context_preflight,
     "schedule_summary": _schedule_summary,
     "schedule_validate_ir": _schedule_validate_ir,
     "schedule_build": _schedule_build,
@@ -304,10 +416,8 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
                 "instructions": (
-                    "Инструменты работают только с файлами внутри agent1. Сначала стройте или "
-                    "проверяйте Schedule IR, затем создавайте новый MPP. Экспорт не перезаписывает "
-                    "файлы и по умолчанию использует data/Шаблон ГРП.mpp. mpp_validate открывает "
-                    "MPP только для чтения и закрывает без сохранения."
+                    "Файлы только внутри agent1. Начните с context_preflight. "
+                    "schedule_build и mpp_export сами проверяют IR; MPP всегда проверяйте mpp_validate."
                 ),
             }
         elif method == "ping":
