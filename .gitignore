@@ -4,4 +4,5 @@ __pycache__/
 out/
 outputs/
 data/
+packages/
 ~$*.xlsx
