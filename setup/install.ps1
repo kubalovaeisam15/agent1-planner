@@ -15,7 +15,12 @@ $requiredFiles = @(
     "instructions/standards.md",
     "tools/mcp_server.py",
     "tools/mspdi_adapter.py",
-    "tools/mpp_validator.py"
+    "tools/mpp_validator.py",
+    ".codex/hooks.template.json",
+    ".codex/hooks/agent1_hook.py",
+    ".agents/skills/grp-schedule-build/SKILL.md",
+    ".agents/skills/mpp-export-validate/SKILL.md",
+    ".agents/skills/grp-schedule-audit/SKILL.md"
 )
 
 $missingFiles = @($requiredFiles | Where-Object {
@@ -74,18 +79,32 @@ startup_timeout_sec = 10
 tool_timeout_sec = 1800
 enabled = true
 "@
-    [System.IO.File]::WriteAllText(
-        (Join-Path $codexDirectory "config.toml"),
-        $codexConfig,
-        [System.Text.UTF8Encoding]::new($false)
-    )
+    $codexConfigPath = Join-Path $codexDirectory "config.toml"
+    $serverPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot "tools/mcp_server.py"))
+    $writeCodexConfig = $true
+    if ([System.IO.File]::Exists($codexConfigPath)) {
+        $existingCodexConfig = [System.IO.File]::ReadAllText(
+            $codexConfigPath, [System.Text.Encoding]::UTF8
+        )
+        if ($existingCodexConfig.Contains($pythonPath) -and
+            $existingCodexConfig.Contains($serverPath)) {
+            $writeCodexConfig = $false
+        }
+    }
+    if ($writeCodexConfig) {
+        [System.IO.File]::WriteAllText(
+            $codexConfigPath,
+            $codexConfig,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+    }
 
     $mcpConfig = [ordered]@{
         mcpServers = [ordered]@{
             "agent1-ms-project" = [ordered]@{
                 type = "stdio"
                 command = $pythonPath
-                args = @((Join-Path $projectRoot "tools/mcp_server.py"))
+                args = @($serverPath)
                 env = [ordered]@{}
             }
         }
@@ -95,6 +114,35 @@ enabled = true
         ($mcpConfig | ConvertTo-Json -Depth 6),
         [System.Text.UTF8Encoding]::new($false)
     )
+
+    $hookTemplatePath = Join-Path $projectRoot ".codex/hooks.template.json"
+    $hookScriptPath = [System.IO.Path]::GetFullPath(
+        (Join-Path $projectRoot ".codex/hooks/agent1_hook.py")
+    ).Replace('\', '/')
+    $pythonHookPath = $pythonPath.Replace('\', '/')
+    $hooksConfig = [System.IO.File]::ReadAllText($hookTemplatePath, [System.Text.Encoding]::UTF8)
+    $hooksConfig = $hooksConfig.Replace("__PYTHON__", $pythonHookPath)
+    $hooksConfig = $hooksConfig.Replace("__HOOK_SCRIPT__", $hookScriptPath)
+    $null = $hooksConfig | ConvertFrom-Json
+    $hooksConfigPath = Join-Path $codexDirectory "hooks.json"
+    $writeHooksConfig = $true
+    if ([System.IO.File]::Exists($hooksConfigPath)) {
+        $existingHooksConfig = [System.IO.File]::ReadAllText(
+            $hooksConfigPath, [System.Text.Encoding]::UTF8
+        )
+        if ([string]::Equals(
+            $existingHooksConfig, $hooksConfig, [System.StringComparison]::Ordinal
+        )) {
+            $writeHooksConfig = $false
+        }
+    }
+    if ($writeHooksConfig) {
+        [System.IO.File]::WriteAllText(
+            $hooksConfigPath,
+            $hooksConfig,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+    }
 }
 
 Write-Host "MS Project Agent: environment check passed" -ForegroundColor Green
@@ -104,6 +152,6 @@ Write-Host "Microsoft Project: $projectVersion"
 if ($CheckOnly) {
     Write-Host "CheckOnly mode: configuration was not changed"
 } else {
-    Write-Host "Created .codex/config.toml and .mcp.json"
+    Write-Host "Created .codex/config.toml, .codex/hooks.json and .mcp.json"
     Write-Host "Restart Codex or launch Claude Code from the project root"
 }

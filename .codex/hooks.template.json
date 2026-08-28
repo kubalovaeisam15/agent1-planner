@@ -1,0 +1,48 @@
+{
+  "description": "Проверка комплекта и защита корпоративного шаблона MS Project Agent.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/agent1_hook.py",
+            "commandWindows": "\"__PYTHON__\" \"__HOOK_SCRIPT__\"",
+            "timeout": 10,
+            "statusMessage": "Проверка комплекта MS Project Agent",
+            "additionalContextLimit": 1600
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "apply_patch|Bash|PowerShell|shell|exec_command|mcp__.*__mpp_export",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/agent1_hook.py",
+            "commandWindows": "\"__PYTHON__\" \"__HOOK_SCRIPT__\"",
+            "timeout": 10,
+            "statusMessage": "Защита корпоративного шаблона"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__.*__mpp_export",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .codex/hooks/agent1_hook.py",
+            "commandWindows": "\"__PYTHON__\" \"__HOOK_SCRIPT__\"",
+            "timeout": 10,
+            "statusMessage": "Контроль валидации MPP",
+            "additionalContextLimit": 800
+          }
+        ]
+      }
+    ]
+  }
+}

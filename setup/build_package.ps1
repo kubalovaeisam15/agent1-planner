@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.4.0",
+    [string]$Version = "0.5.0",
     [string]$OutputDirectory = "packages"
 )
 
@@ -23,7 +23,7 @@ if (-not ([System.IO.Path]::GetDirectoryName($stagePath)).Equals(
 
 try {
     [System.IO.Directory]::CreateDirectory($stagePath) | Out-Null
-    foreach ($directoryName in @("instructions", "data", "tools", "tests", "docs", "setup")) {
+    foreach ($directoryName in @("instructions", "data", "tools", "tests", "docs", "setup", ".agents", ".codex")) {
         [System.IO.Directory]::CreateDirectory((Join-Path $stagePath $directoryName)) | Out-Null
     }
 
@@ -50,6 +50,22 @@ try {
                 Copy-Item -LiteralPath $_.FullName -Destination $destination
             }
     }
+
+    $skillsSource = Join-Path $projectRoot ".agents"
+    Get-ChildItem -LiteralPath $skillsSource -Recurse -File |
+        Where-Object { $_.FullName -notmatch '[\\/]__pycache__[\\/]' } |
+        ForEach-Object {
+            $relativePath = $_.FullName.Substring($skillsSource.Length).TrimStart('\', '/')
+            $destination = Join-Path (Join-Path $stagePath ".agents") $relativePath
+            [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($destination)) | Out-Null
+            Copy-Item -LiteralPath $_.FullName -Destination $destination
+        }
+
+    Copy-Item -LiteralPath (Join-Path $projectRoot ".codex/hooks.template.json") `
+        -Destination (Join-Path $stagePath ".codex")
+    [System.IO.Directory]::CreateDirectory((Join-Path $stagePath ".codex/hooks")) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $projectRoot ".codex/hooks/agent1_hook.py") `
+        -Destination (Join-Path $stagePath ".codex/hooks")
 
     $items = @(Get-ChildItem -LiteralPath $stagePath | ForEach-Object FullName)
     Compress-Archive -LiteralPath $items -DestinationPath $archivePath -CompressionLevel Optimal
