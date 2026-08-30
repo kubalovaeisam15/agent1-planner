@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from grp_model import (  # noqa: E402
     Assumption, Bnd, Node, Std, backward_pass, compute_thermal_and_fit, dfmt, dparse,
     fmt_links, forward_pass, monolith_floor_durations, parse_links, pile_duration,
+    pile_type_durations,
     seasonal_duration,
 )
 from schedule_ir import schedule_from_grp, validate_schedule_ir, write_schedule_ir  # noqa: E402
@@ -55,9 +56,9 @@ if hasattr(sys.stdout, "reconfigure"):
 ROOT = Path(__file__).resolve().parents[1]
 SKELETON = ROOT / "tests" / "template_parsed.json"
 
-COLUMNS = ["Вид работ", "Код классификатора", "Уровень структуры", "Ид.",
+COLUMNS = ["Тип ограничения", "Вид работ", "Код классификатора", "Уровень структуры", "Ид.",
            "Название задачи", "% завершения", "Длительность", "Начало", "Окончание",
-           "Предшественники", "Последователи", "комментарий",
+           "Критическая задача", "Предшественники", "Последователи", "комментарий",
            "Окончание с резервом"]
 
 RESERVE_PER_YEAR = 30  # standards.md §17а, DEC-31
@@ -184,12 +185,29 @@ class Build:
     # ==================================================================
     def load_skeleton(self) -> None:
         raw = json.loads(SKELETON.read_text(encoding="utf-8"))
-        known = {r["Ид."] for r in raw}
+        # В актуальном Excel встречаются разрывы и дубли исходных Ид. Внутренний
+        # ключ поэтому строится по физической позиции строки; ссылки по Ид.
+        # разрешаются в ближайшую предшествующую строку с таким Ид. (иначе —
+        # в первое вхождение). На выходе Ид. всё равно назначаются заново.
+        id_positions: dict[str, list[int]] = {}
+        for pos, item in enumerate(raw, start=1):
+            id_positions.setdefault(str(item["Ид."]), []).append(pos)
+
+        def source_key(pos: int) -> str:
+            return f"s{pos}"
+
+        def resolve_source_id(raw_id: str, current_pos: int) -> str | None:
+            candidates = id_positions.get(str(raw_id), [])
+            if not candidates:
+                return None
+            previous = [pos for pos in candidates if pos < current_pos]
+            return source_key(previous[-1] if previous else candidates[0])
+
         self.rows = []
         root = ""
         control_branch = ""
         integration_phase_b = False
-        for r in raw:
+        for pos, r in enumerate(raw, start=1):
             lvl = int(r["Уровень структуры"])
             name = r["Название задачи"]
             if lvl == 1:
@@ -223,17 +241,18 @@ class Build:
                     f"Не определена фаза верхнего раздела «{root}» — обновите карту фаз "
                     f"typGRP.md §4 перед расчётом резерва DEC-31.")
 
-            links = [(str(pid), kind, lag)
+            links = [(resolved, kind, lag)
                      for pid, kind, lag in parse_links(r["Предшественники"])
-                     if str(pid) in known]
+                     if (resolved := resolve_source_id(str(pid), pos)) is not None]
             self.rows.append({
-                "key": r["Ид."],
+                "key": source_key(pos),
                 "lvl": lvl,
                 "name": name,
                 "dur": self._dur(r["Длительность"]),
                 "links": links,
                 "comment": r["комментарий"],
                 "tpl_start": r["Начало"],
+                "constraint_type": r.get("Тип ограничения", "Как можно раньше"),
                 "src": "шаблон v2 (typGRP.md)",
                 "phase": phase,
             })
@@ -428,8 +447,8 @@ class Build:
         """
         blocks = self.object_blocks()
         proto_names = [n for n in blocks if n.startswith("Корпус")]
-        if len(proto_names) < 2:
-            raise SystemExit("В шаблоне ожидались два прототипа корпуса — каркас изменился.")
+        if not proto_names:
+            raise SystemExit("В шаблоне не найден прототип корпуса.")
         protos = {}
         for n in proto_names:
             i, kids = blocks[n]
@@ -437,7 +456,13 @@ class Build:
             protos[pref] = [dict(self.rows[j], links=list(self.rows[j]["links"]))
                             for j in [i] + kids]
 
-        pvc_proto, stained_proto = protos.get("К1"), protos.get("К2")
+        viable = [proto for proto in protos.values() if len(proto) > 1]
+        if not viable:
+            raise SystemExit("В шаблоне заголовки корпусов не имеют дочерних задач.")
+        # В актуальном шаблоне допустим один полный универсальный прототип:
+        # применимость ПВХ/витражей далее всё равно определяется ТЭП корпуса.
+        pvc_proto = (protos.get("К1") if len(protos.get("К1", [])) > 1 else viable[0])
+        stained_proto = (protos.get("К2") if len(protos.get("К2", [])) > 1 else viable[0])
         first, last = blocks[proto_names[0]][0], blocks[proto_names[-1]][1][-1]
 
         # Соответствие «ключ прототипа → ключи сгенерированных задач». Нужно для
@@ -820,6 +845,21 @@ class Build:
         wall = zc["ограждение_котлована"].lower()
         pk = self.parking_prefix
 
+        # DEC-38: пользовательская дата старта проекта обозначает дату
+        # согласования МЗ. Шаблонный SNET этой задачи не сдвигается от эталона,
+        # а всегда равен указанной дате согласования МЗ.
+        dd = self.one("Проведение ДД и выкуп 100% акций")
+        if dd is not None:
+            self.rows[dd]["constraint_type"] = "Начало не ранее"
+            self.rows[dd]["constraint_date"] = dfmt(self.start)
+            self.rows[dd]["tpl_start"] = ""
+            self.rows[dd]["comment"] = (
+                f"DEC-38: Начало не ранее {dfmt(self.start)} — дата согласования МЗ "
+                "из параметра старт_проекта"
+            )
+            self.why("Проведение ДД и выкуп 100% акций", dfmt(self.start),
+                     "DEC-38 · старт_проекта = согласование МЗ", "высокая")
+
         # --- земляные работы (STD-ZC-002) ---
         if wall not in Std.EARTH:
             self.note("standards.md §6", f"Тип ограждения котлована «{wall}» не распознан — "
@@ -848,10 +888,16 @@ class Build:
                  Std.PIT_WALL_SRC, "средняя" if wall == "отвал" else "высокая", f"Тип: {wall}")
 
         # --- свайное основание (STD-ZC-003/004) ---
-        pile_days, trace = pile_duration(zc.get("сваи", []))
-        for nm in ("По договору Свайное основание БНС (при наличии)",
-                   "По договору Свайное основание Забивные (при наличии)"):
-            self.set_dur(self.one(nm, pk), pile_days, "standards.md §7 STD-ZC-003/004")
+        pile_by_type, pile_days, trace = pile_type_durations(zc.get("сваи", []))
+        pile_tasks = {
+            "бнс": "По договору Свайное основание БНС (при наличии)",
+            "забивные": "По договору Свайное основание Забивные (при наличии)",
+        }
+        for kind, nm in pile_tasks.items():
+            hits = self.find(nm)
+            for task_index in hits:
+                self.set_dur(task_index, pile_by_type.get(kind, 0),
+                             "standards.md §7 STD-ZC-003/004 · DEC-35")
         self.why("Свайное основание", f"{pile_days} дн", "standards.md §7 STD-ZC-003/004",
                  "средняя", " · ".join(trace) + " · статус ⚠, калибровки не проходило")
         if pile_days > Std.PILE_WARN_DAYS[0]:
@@ -878,6 +924,17 @@ class Build:
         for i in self.find("По договору Монолитные конструкции ниже отм 0,000",
                            None, exact=False):
             self.set_dur(i, below, Std.BELOW_ZERO[1])
+            prefix, _ = strip_prefix(self.rows[i]["name"])
+            object_kind = "Паркинг" if prefix.startswith("П") else "Корпус"
+            floor_phrase = (
+                "1 подземный этаж" if lv == 1 else
+                f"{lv} подземных этажа" if 2 <= lv <= 4 else
+                f"{lv} подземных этажей"
+            )
+            self.rows[i]["name"] = (
+                f"{prefix}. По договору Монолитные конструкции ниже отм 0,000 "
+                f"({floor_phrase}) {object_kind}"
+            )
         self.why("Монолит ниже 0.000", f"{below} дн на объект", Std.BELOW_ZERO[1], "высокая",
                  f"{lv} подземн. этаж(а) × {Std.BELOW_ZERO[0]} дн; развёрнут по корпусам "
                  f"и паркингу отдельными задачами")
@@ -979,7 +1036,12 @@ class Build:
 
         kids = self.subtree(head)
         old_keys = [self.rows[j]["key"] for j in kids]
-        head_links = list(self.rows[kids[0]]["links"]) if kids else []
+        below = self.one("По договору Монолитные конструкции ниже отм 0,000", pref,
+                         exact=False)
+        if below is None:
+            raise SystemExit(
+                f"Не найден покорпусный подземный монолит для старта 1 этажа {corpus['код']}.")
+        head_links = [(self.rows[below]["key"], "ОН", 0)]
         lvl = self.rows[head]["lvl"] + 1
         del self.rows[kids[0]:kids[-1] + 1]
 
@@ -1057,7 +1119,13 @@ class Build:
                 nodes[r["key"]] = Node(key=r["key"], duration=0, rollup=kids)
                 continue
             n = Node(key=r["key"], duration=r["dur"] or 0, links=list(r["links"]))
-            if not n.links and r.get("tpl_start"):
+            if (r.get("constraint_type") == "Начало не ранее"
+                    and (r.get("constraint_date") or r.get("tpl_start"))):
+                raw_constraint = r.get("constraint_date") or r["tpl_start"]
+                n.anchor_start = dparse(raw_constraint)
+                if not r.get("constraint_date"):
+                    n.anchor_start += timedelta(days=self.shift)
+            elif not n.links and r.get("tpl_start"):
                 n.anchor_start = dparse(r["tpl_start"]) + timedelta(days=self.shift)
             nodes[r["key"]] = n
         return nodes
@@ -1247,9 +1315,18 @@ class Build:
                 if i is not None:
                     fit_leaves.append(i)
             for i in fit_leaves:
-                link_to_anchor(i, res.fit_start, res.fit_duration,
-                               f"BND-OTD-002/003: старт от {base_label} +{Bnd.LAG_FIT[0]} через "
-                               f"сезонный гейт, длительность {res.fit_duration} дн (минимум 210)")
+                # DEC-37: сохраняем физические предшественники типового ГРП
+                # (договор + НН+90 от кладки перегородок). Если сезонный гейт
+                # требует более позднего старта, он задаётся SNET, а не
+                # искусственной связью от завершения монолита.
+                self.rows[i]["dur"] = res.fit_duration
+                self.rows[i]["constraint_type"] = "Начало не ранее"
+                self.rows[i]["constraint_date"] = dfmt(res.fit_start)
+                self.rows[i]["comment"] = (
+                    f"BND-OTD-002/003 · DEC-37: типовые предшественники сохранены; "
+                    f"Начало не ранее {dfmt(res.fit_start)} после сезонного гейта; "
+                    f"длительность {res.fit_duration} дн (минимум 210)"
+                )
                 self.fit_tasks.append((self.rows[i]["key"], corpus["код"]))
 
             # --- раздел ТХ: ОН от вехи пуска тепла (BND-OTD-004) ---
@@ -1439,6 +1516,11 @@ class Build:
                 for pid, _, _ in links:
                     succ.setdefault(pid, []).append(i)
             out.append({
+                # Microsoft Project не сохраняет ограничения на суммарных
+                # задачах. SNET задаётся на рабочих дочерних задачах, где оно
+                # сочетается с типовыми физическими предшественниками (DEC-37).
+                "Тип ограничения": ("Как можно раньше" if is_sum else
+                                     r.get("constraint_type", "Как можно раньше")),
                 "Вид работ": "",
                 "Код классификатора": "",
                 "Уровень структуры": r["lvl"],
@@ -1448,6 +1530,7 @@ class Build:
                 "Длительность": "" if is_sum else f"{(r['dur'] or 0)} дней",
                 "Начало": dfmt(n.start) if n and n.start else "",
                 "Окончание": dfmt(n.finish) if n and n.finish else "",
+                "Критическая задача": "Да" if (n and n.critical and not is_sum) else "Нет",
                 "Предшественники": "" if is_sum else fmt_links(links),
                 "Последователи": "",
                 "комментарий": ("КРИТИЧЕСКИЙ ПУТЬ · " if (n and n.critical and not is_sum) else "")
@@ -1564,7 +1647,7 @@ def write_excel(path: Path, rows: list[dict], build: Build) -> None:
                 ws.cell(i, c).fill = crit_fill
         ws.cell(i, name_col).alignment = Alignment(indent=max(0, r["Уровень структуры"] - 1))
 
-    for i, w in enumerate([12, 16, 9, 7, 62, 11, 13, 12, 12, 30, 24, 60, 20], start=1):
+    for i, w in enumerate([18, 12, 16, 9, 7, 62, 11, 13, 12, 12, 14, 30, 24, 60, 20], start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
 
@@ -1620,8 +1703,8 @@ def write_excel(path: Path, rows: list[dict], build: Build) -> None:
     leaves = [r for r in rows if r["Длительность"]]
     sums = [r for r in rows if not r["Длительность"]]
     checks = [
-        ("Структура", "Выведены все 12 колонок", True),
-        ("Структура", "Выведена колонка 13 «Окончание с резервом» (DEC-31)",
+        ("Структура", "Выведены все 14 колонок обновлённого шаблона", True),
+        ("Структура", "Выведена колонка 15 «Окончание с резервом» (DEC-31)",
          all("Окончание с резервом" in r for r in rows)),
         ("Структура", "Уровень первой строки = 1", rows[0]["Уровень структуры"] == 1),
         ("Структура", "Уровень не растёт больше чем на 1",

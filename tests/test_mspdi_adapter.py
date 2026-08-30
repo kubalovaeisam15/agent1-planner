@@ -59,3 +59,20 @@ def test_mspdi_adds_snet_only_to_independent_calendar_anchor():
     task = root.findall("p:Tasks/p:Task", ns)[-1]
     assert task.findtext("p:ConstraintType", namespaces=ns) == "4"
     assert task.findtext("p:ConstraintDate", namespaces=ns) == "2026-02-01T00:00:00"
+
+
+def test_mspdi_preserves_explicit_snet_with_physical_predecessor():
+    schedule = sample_schedule()
+    schedule.tasks.append(ScheduleTask(
+        "4", "Отделка", 1, "task", duration_days=210,
+        start=date(2026, 6, 1), finish=date(2026, 12, 28),
+        predecessors=[ScheduleLink("2", "SS", 90)],
+        constraint_type="start_no_earlier_than",
+        constraint_date=date(2026, 6, 1),
+    ))
+    root = ET.fromstring(schedule_to_mspdi(schedule))
+    ns = {"p": NS}
+    task = root.findall("p:Tasks/p:Task", ns)[-1]
+    assert task.findtext("p:ConstraintType", namespaces=ns) == "4"
+    assert task.findtext("p:ConstraintDate", namespaces=ns) == "2026-06-01T00:00:00"
+    assert task.find("p:PredecessorLink", ns) is not None

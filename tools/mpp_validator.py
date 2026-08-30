@@ -48,6 +48,7 @@ class MPPTask:
     critical: bool
     total_slack_minutes: float | None
     constraint_type: int
+    constraint_date: date | None
     deadline: date | None
     predecessors: list[MPPLink] = field(default_factory=list)
 
@@ -58,6 +59,7 @@ class MPPSnapshot:
     start: date | None
     finish: date | None
     tasks: list[MPPTask]
+    calculation_mode: int | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +136,7 @@ def parse_mspdi(path: Path) -> MPPSnapshot:
             critical=_bool(node, "Critical"),
             total_slack_minutes=_number(_text(node, "TotalSlack")),
             constraint_type=int(_text(node, "ConstraintType", "0")),
+            constraint_date=_date(_text(node, "ConstraintDate")),
             deadline=_date(_text(node, "Deadline")),
             predecessors=links,
         ))
@@ -142,6 +145,7 @@ def parse_mspdi(path: Path) -> MPPSnapshot:
         start=_date(_text(root, "StartDate")),
         finish=_date(_text(root, "FinishDate")),
         tasks=sorted(tasks, key=lambda task: task.task_id),
+        calculation_mode=None,
     )
 
 
@@ -179,6 +183,7 @@ def parse_com_snapshot(path: Path) -> MPPSnapshot:
             critical=bool(item["critical"]),
             total_slack_minutes=_number(item.get("total_slack_minutes")),
             constraint_type=int(item["constraint_type"]),
+            constraint_date=_date(item.get("constraint_date") or ""),
             deadline=_date(item.get("deadline") or ""),
             predecessors=links,
         ))
@@ -187,6 +192,8 @@ def parse_com_snapshot(path: Path) -> MPPSnapshot:
         start=_date(raw.get("start") or ""),
         finish=_date(raw.get("finish") or ""),
         tasks=sorted(tasks, key=lambda task: task.task_id),
+        calculation_mode=(int(raw["calculation_mode"])
+                          if raw.get("calculation_mode") is not None else None),
     )
 
 
@@ -238,6 +245,10 @@ def _ancestor_map(tasks: list[MPPTask]) -> dict[int, tuple[int, ...]]:
 def validate_snapshot(snapshot: MPPSnapshot) -> list[MPPIssue]:
     """Проверяет структуру и качество сети независимо от исходного IR."""
     issues: list[MPPIssue] = []
+    if snapshot.calculation_mode is not None and snapshot.calculation_mode != -1:
+        issues.append(MPPIssue(
+            "error", "MPP-CALCULATION-MODE",
+            "Автоматический перерасчёт Microsoft Project отключён"))
     ids = [task.task_id for task in snapshot.tasks]
     uids = {task.uid for task in snapshot.tasks}
     uid_to_task = {task.uid: task for task in snapshot.tasks}
@@ -270,7 +281,7 @@ def validate_snapshot(snapshot: MPPSnapshot) -> list[MPPIssue]:
         if task.constraint_type in HARD_CONSTRAINTS:
             issues.append(MPPIssue("warning", "MPP-HARD-CONSTRAINT",
                                    f"Жёсткое ограничение типа {task.constraint_type}", **label))
-        elif task.constraint_type not in (0, 1):
+        elif task.constraint_type not in (0, 1, 4):
             issues.append(MPPIssue("warning", "MPP-CONSTRAINT",
                                    f"Ограничение типа {task.constraint_type}", **label))
         seen_links: set[tuple[int, str, float]] = set()
@@ -420,6 +431,22 @@ def compare_with_ir(snapshot: MPPSnapshot, schedule: ScheduleProject) -> list[MP
                 **label))
         if task.deadline is not None:
             deadline_count += 1
+        expected_constraint = (
+            4 if ir_task.constraint_type == "start_no_earlier_than"
+            else (4 if (ir_task.task_type != "summary" and not ir_task.predecessors
+                        and ir_task.start and ir_task.start > schedule.project_start) else 0)
+        )
+        if task.constraint_type != expected_constraint:
+            issues.append(MPPIssue(
+                "error", "MPP-IR-CONSTRAINT-TYPE",
+                f"Тип ограничения {task.constraint_type}, в IR ожидается "
+                f"{expected_constraint}", **label))
+        if (expected_constraint == 4 and ir_task.constraint_date is not None
+                and task.constraint_date != ir_task.constraint_date):
+            issues.append(MPPIssue(
+                "error", "MPP-IR-CONSTRAINT-DATE",
+                f"Дата ограничения {task.constraint_date}, в IR "
+                f"{ir_task.constraint_date}", **label))
         # Критичность суммарных строк Project вычисляет самостоятельно и она
         # не входит в контракт IR; сравниваются только задачи и вехи.
         if ir_task.task_type != "summary" and task.critical != ir_task.critical:
@@ -458,7 +485,9 @@ def report_dict(snapshot: MPPSnapshot, issues: list[MPPIssue]) -> dict:
         counts[issue.code] = counts.get(issue.code, 0) + 1
     return {
         "project": {"name": snapshot.name, "start": str(snapshot.start),
-                    "finish": str(snapshot.finish), "task_count": len(snapshot.tasks)},
+                    "finish": str(snapshot.finish), "task_count": len(snapshot.tasks),
+                    "calculation_mode": snapshot.calculation_mode,
+                    "automatic_calculation": snapshot.calculation_mode == -1},
         "result": {"errors": errors, "warnings": warnings, "infos": infos,
                    "by_code": counts},
         "issues": [asdict(issue) for issue in issues],

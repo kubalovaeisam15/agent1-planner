@@ -6,8 +6,8 @@
   печать отчёта сверки в stdout
 
 Отличие от версии для шаблона v1: колонки «СДР» больше нет, «Уровень структуры»
-подаётся самим шаблоном (typGRP.md §2.2) и не вычисляется. Добавлены колонки
-«Вид работ» и «Код классификатора» — заготовка под справочник МДМ, в шаблоне пустые.
+подаётся самим шаблоном (typGRP.md §2.2) и не вычисляется. Колонка
+«Тип ограничения» сохраняет разрешённые ограничения Microsoft Project.
 """
 from __future__ import annotations
 
@@ -29,11 +29,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "instructions" / "Шаблон_ГРП v2.xlsx"
 DST = ROOT / "tests" / "template_parsed.json"
 
-COLUMNS = [
-    "Вид работ", "Код классификатора", "Уровень структуры", "Ид.",
-    "Название задачи", "% завершения", "Длительность",
-    "Начало", "Окончание", "Предшественники", "Последователи", "комментарий",
+SOURCE_COLUMNS = [
+    "Тип ограничения", "Вид работ", "Код классификатора", "Уровень структуры", "Ид.",
+    "Название задачи", "% завершения", "Длительность", "Начало", "Окончание",
+    "Критическая задача", "Предшественники", "Последователи", "комментарий",
 ]
+COLUMNS = [name for name in SOURCE_COLUMNS if name != "Критическая задача"]
 
 # Заявлено в typGRP.md §3 — сверяем, а не доверяем.
 DECLARED = {
@@ -61,12 +62,14 @@ def load() -> list[dict]:
     ws = wb[wb.sheetnames[0]]
     rows = ws.iter_rows(values_only=True)
     header = [cell(c) for c in next(rows)]
-    if header != COLUMNS:
-        raise SystemExit(f"Шапка шаблона изменилась.\nОжидалось: {COLUMNS}\nПолучено:  {header}")
+    if header != SOURCE_COLUMNS:
+        raise SystemExit(
+            f"Шапка шаблона изменилась.\nОжидалось: {SOURCE_COLUMNS}\nПолучено:  {header}")
 
     tasks = []
     for raw in rows:
-        rec = {name: cell(v) for name, v in zip(COLUMNS, raw)}
+        source = {name: cell(v) for name, v in zip(SOURCE_COLUMNS, raw)}
+        rec = {name: source[name] for name in COLUMNS}
         if not rec["Ид."] and not rec["Название задачи"]:
             continue
         rec["Уровень структуры"] = int(rec["Уровень структуры"])

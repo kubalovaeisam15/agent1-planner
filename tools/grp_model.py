@@ -247,20 +247,27 @@ def monolith_floor_durations(n_floors: int, complex_frame: bool) -> tuple[int, l
     return Std.MON_FIRST[0], typical, Std.MON_ROOF[0]
 
 
-def pile_duration(piles: list[dict]) -> tuple[int, list[str]]:
-    """STD-ZC-003 / STD-ZC-004. Типы идут параллельно — берётся максимум."""
-    trace, durations = [], []
+def pile_type_durations(piles: list[dict]) -> tuple[dict[str, int], int, list[str]]:
+    """STD-ZC-003/004: длительность каждого типа и параллельного блока."""
+    trace: list[str] = []
+    durations: dict[str, int] = {}
     for p in piles:
         kind = p["тип"].lower()
         rate, src = Std.PILE_RATE[kind]
         rigs = max(1, int(p.get("установок", 1)))
         d = math.ceil(p["количество"] / (rate * rigs))
-        durations.append(d)
+        durations[kind] = d
         trace.append(f"{p['тип']}: {p['количество']} шт / ({rate} × {rigs} уст.) = {d} дн — {src}")
     if not durations:
-        return 0, trace
-    total = max(durations)  # шаблон 11.4.1.1.3.1/.2 — подзадачи параллельны
+        return {}, 0, trace
+    total = max(durations.values())  # подзадачи разных типов идут параллельно
     trace.append(f"типы свай ведутся параллельно → длительность блока = max = {total} дн")
+    return durations, total, trace
+
+
+def pile_duration(piles: list[dict]) -> tuple[int, list[str]]:
+    """Обратимо совместимый интерфейс: длительность параллельного блока и трасса."""
+    _, total, trace = pile_type_durations(piles)
     return total, trace
 
 

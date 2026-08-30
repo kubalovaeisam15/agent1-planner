@@ -86,6 +86,10 @@ try {
     $projectApp = New-Object -ComObject MSProject.Application
     try { $projectApp.Visible = $false } catch { }
     try { $projectApp.DisplayAlerts = $false } catch { }
+    # Во время массового переноса строк считаем вручную; перед сохранением
+    # обязательно включаем автоматический перерасчёт (DEC-39).
+    # Microsoft PjCalculation: pjManual = 0.
+    try { $projectApp.Calculation = 0 } catch { }
     $missing = [Type]::Missing
 
     $projectApp.FileOpenEx(
@@ -119,12 +123,17 @@ try {
     if ($openResult -ne 0) { throw "MS Project OpenXML returned $openResult" }
     $importProject = $projectApp.ActiveProject
     if ($null -eq $importProject) { throw "MS Project did not open the MSPDI schedule" }
+    $importProjectStart = [datetime]$importProject.ProjectStart
 
     $projectApp.SelectAll() | Out-Null
     $projectApp.EditCopy() | Out-Null
     $projectApp.WindowActivate($templateWindowName) | Out-Null
     $project = $projectApp.ActiveProject
     if ($null -eq $project) { throw "MS Project could not reactivate the corporate template copy" }
+    # Task-row transfer does not carry project-level properties. Keep the
+    # corporate template objects, but set the copied project's scheduling
+    # origin from the verified MSPDI schedule before pasting its tasks.
+    $project.ProjectStart = $importProjectStart
     $projectApp.SelectRow(1, $false) | Out-Null
     $projectApp.EditPaste() | Out-Null
 
@@ -147,6 +156,11 @@ try {
         $task.Duration = $expectedDuration
         $durationOverrideCount += 1
         if ([Math]::Abs(([double]$task.Duration) - $expectedDuration) -gt 0.01) { $durationMismatchCount += 1 }
+    }
+    # Microsoft PjCalculation: pjAutomatic = -1.
+    try { $projectApp.Calculation = -1 } catch { }
+    if ([int]$projectApp.Calculation -ne -1) {
+        throw "Microsoft Project automatic calculation could not be enabled"
     }
     $projectApp.CalculateProject() | Out-Null
 
@@ -206,6 +220,10 @@ try {
     }
 
     $projectApp.FileSave() | Out-Null
+    $calculationMode = [int]$projectApp.Calculation
+    if ($calculationMode -ne -1) {
+        throw "Output MPP was not saved with automatic calculation enabled"
+    }
     if (-not [System.IO.File]::Exists($mppPath)) { throw "MS Project did not save the output MPP" }
 
     $report = [ordered]@{
@@ -216,6 +234,7 @@ try {
         project_name = [string]$project.Name
         project_start = ([datetime]$project.ProjectStart).ToString("yyyy-MM-dd")
         project_finish = ([datetime]$project.ProjectFinish).ToString("yyyy-MM-dd")
+        calculation_mode = $calculationMode
         template_mpp = $templatePath
         template_task_count = $templateTaskCount
         template_calendars = $templateCalendars

@@ -21,6 +21,7 @@ SCHEMA_VERSION = "1.0"
 LINK_TYPES = {"FS", "SS", "FF", "SF"}
 LINK_TYPE_FROM_RU = {"ОН": "FS", "НН": "SS", "ОО": "FF", "НО": "SF"}
 TASK_TYPES = {"summary", "task", "milestone"}
+CONSTRAINT_TYPES = {"as_soon_as_possible", "start_no_earlier_than"}
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,8 @@ class ScheduleTask:
     calendar_id: str = "calendar-7d"
     notes: str = ""
     predecessors: list[ScheduleLink] = field(default_factory=list)
+    constraint_type: str = "as_soon_as_possible"
+    constraint_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +91,7 @@ class ScheduleProject:
             task["start"] = _date_or_none(task.get("start"))
             task["finish"] = _date_or_none(task.get("finish"))
             task["reserve_finish"] = _date_or_none(task.get("reserve_finish"))
+            task["constraint_date"] = _date_or_none(task.get("constraint_date"))
             task["predecessors"] = [ScheduleLink(**link)
                                       for link in task.get("predecessors", [])]
             tasks.append(ScheduleTask(**task))
@@ -170,6 +174,11 @@ def schedule_from_grp(project: dict[str, Any], rows: list[dict[str, Any]]) -> Sc
                         for pid, kind, lag in parse_links(
                             str(row.get("Предшественники", "")))]
         percent = row.get("% завершения")
+        constraint_type = (
+            "start_no_earlier_than"
+            if str(row.get("Тип ограничения", "")).strip() == "Начало не ранее"
+            else "as_soon_as_possible"
+        )
         tasks.append(ScheduleTask(
             task_id=task_id,
             name=str(row["Название задачи"]),
@@ -187,6 +196,9 @@ def schedule_from_grp(project: dict[str, Any], rows: list[dict[str, Any]]) -> Sc
             critical=bool(row.get("_critical", False)),
             notes=str(row.get("комментарий", "")),
             predecessors=predecessors,
+            constraint_type=constraint_type,
+            constraint_date=(_grp_date(row.get("Начало"))
+                             if constraint_type == "start_no_earlier_than" else None),
         ))
 
     return ScheduleProject(
@@ -229,6 +241,15 @@ def validate_schedule_ir(schedule: ScheduleProject) -> list[IRIssue]:
             issues.append(IRIssue("IR-TASK-TYPE", f"Неизвестный тип {task.task_type}", task.task_id))
         if task.calendar_id not in calendar_ids:
             issues.append(IRIssue("IR-CALENDAR", "Неизвестный календарь", task.task_id))
+        if task.constraint_type not in CONSTRAINT_TYPES:
+            issues.append(IRIssue("IR-CONSTRAINT-TYPE",
+                                  f"Неизвестный тип ограничения {task.constraint_type}",
+                                  task.task_id))
+        if (task.constraint_type == "start_no_earlier_than"
+                and task.constraint_date is None):
+            issues.append(IRIssue("IR-CONSTRAINT-DATE",
+                                  "Для «Начало не ранее» не задана дата",
+                                  task.task_id))
         if task.outline_level > 1 and task.parent_id is None:
             issues.append(IRIssue("IR-PARENT", "У вложенной задачи нет родителя", task.task_id))
         elif task.parent_id is not None:

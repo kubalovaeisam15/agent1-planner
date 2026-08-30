@@ -165,13 +165,22 @@ def schedule_to_mspdi(schedule: ScheduleProject) -> bytes:
             _add(node, "RegularWork", "PT0H0M0S")
             _add(node, "RemainingDuration", _elapsed_duration(task.duration_days))
 
-        # Независимая задача с более поздним стартом — календарный якорь ГРП.
-        # SNET сохраняет дату, не превращая все связанные задачи в ограничения.
-        if (task.task_type != "summary" and not task.predecessors and task.start
-                and task.start > schedule.project_start):
+        # Явное SNET из IR может сочетаться с физическими предшественниками.
+        # Для старых независимых календарных якорей сохраняется fallback.
+        explicit_snet = (
+            task.constraint_type == "start_no_earlier_than"
+            and task.constraint_date is not None
+            and task.task_type != "summary"
+        )
+        fallback_snet = (
+            task.task_type != "summary" and not task.predecessors and task.start
+            and task.start > schedule.project_start
+        )
+        if explicit_snet or fallback_snet:
             _add(node, "ConstraintType", 4)
             _add(node, "CalendarUID", 1)
-            _add(node, "ConstraintDate", _dt(task.start))
+            _add(node, "ConstraintDate", _dt(
+                task.constraint_date if explicit_snet else task.start))
         else:
             _add(node, "ConstraintType", 0)
             _add(node, "CalendarUID", 1)
@@ -278,6 +287,10 @@ def export_mpp(ir_path: Path, mpp_path: Path, *, template_path: Path = DEFAULT_T
     if report.get("duration_mismatch_count"):
         raise RuntimeError(
             f"MPP изменил длительности {report['duration_mismatch_count']} задач")
+    if report.get("calculation_mode") != -1:
+        raise RuntimeError(
+            "MPP сохранён без автоматического перерасчёта: "
+            f"Calculation={report.get('calculation_mode')}")
     if report.get("project_start") != schedule.project_start.isoformat():
         raise RuntimeError(
             f"Начало MPP {report.get('project_start')} не совпадает с IR "

@@ -29,8 +29,6 @@ try {
     $projectApp = New-Object -ComObject MSProject.Application
     try { $projectApp.Visible = $false } catch { }
     try { $projectApp.DisplayAlerts = $false } catch { }
-    try { $projectApp.Calculation = 0 } catch { } # pjManual
-
     $missing = [Type]::Missing
     $projectApp.FileOpenEx(
         $mppPath, $true, $missing, $missing, $missing, $missing, $true
@@ -39,6 +37,7 @@ try {
     if ($null -eq $project) {
         throw "MS Project did not open the input MPP"
     }
+    $calculationMode = [int]$projectApp.Calculation
 
     $tasks = [System.Collections.Generic.List[object]]::new()
     foreach ($task in $project.Tasks) {
@@ -57,6 +56,7 @@ try {
             critical = [bool]$task.Critical
             total_slack_minutes = Convert-ProjectNumber $task.TotalSlack
             constraint_type = [int]$task.ConstraintType
+            constraint_date = Convert-ProjectDate $task.ConstraintDate
             deadline = Convert-ProjectDate $task.Deadline
             predecessors = [string]$task.Predecessors
         })
@@ -66,6 +66,7 @@ try {
         name = [string]$project.Name
         start = Convert-ProjectDate $project.ProjectStart
         finish = Convert-ProjectDate $project.ProjectFinish
+        calculation_mode = $calculationMode
         tasks = $tasks
     }
     $snapshot | ConvertTo-Json -Depth 5 |

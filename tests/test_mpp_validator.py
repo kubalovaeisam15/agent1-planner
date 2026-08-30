@@ -105,7 +105,7 @@ def mpp_task(uid: int, name: str, level: int, *, summary: bool = False,
         milestone=milestone, start=date(2026, 1, 1), finish=date(2026, 1, 2),
         duration_minutes=0 if milestone else 1440, percent_complete=0,
         critical=critical, total_slack_minutes=0, constraint_type=0,
-        deadline=None, predecessors=predecessors or [],
+        constraint_date=None, deadline=None, predecessors=predecessors or [],
     )
 
 
@@ -127,6 +127,17 @@ def test_summary_links_cover_nested_leaf_network_and_critical_path():
     coverage = next(issue for issue in issues
                     if issue.code == "MPP-SUMMARY-LINK-COVERAGE")
     assert coverage.severity == "info"
+
+
+def test_manual_calculation_mode_is_an_error():
+    snapshot = MPPSnapshot(
+        "Тест", date(2026, 1, 1), date(2026, 1, 1),
+        [mpp_task(1, "Старт", 1, milestone=True)],
+        calculation_mode=0,
+    )
+    issue = next(item for item in validate_snapshot(snapshot)
+                 if item.code == "MPP-CALCULATION-MODE")
+    assert issue.severity == "error"
 
 
 def test_reporting_milestone_is_not_treated_as_open_finish():
