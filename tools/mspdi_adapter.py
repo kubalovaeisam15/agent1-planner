@@ -26,7 +26,7 @@ NS = "http://schemas.microsoft.com/project"
 ET.register_namespace("", NS)
 
 LINK_TYPE = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
-ELAPSED_DAY = 8
+DAY = 7
 TENTHS_OF_MINUTE_PER_DAY = 24 * 60 * 10
 
 
@@ -44,9 +44,9 @@ def _dt(value: date) -> str:
     return f"{value.isoformat()}T00:00:00"
 
 
-def _elapsed_duration(days: int) -> str:
-    # Project 2021 обнуляет большие elapsed-длительности вида PT6000H.
-    # ISO-форма P250D импортируется как 250 календарных (elapsed) дней.
+def _day_duration(days: int) -> str:
+    # Project 2021 обнуляет большие длительности вида PT6000H.
+    # ISO-форма P250D надёжно импортирует длительность в днях.
     return f"P{days}D"
 
 
@@ -90,7 +90,7 @@ def schedule_to_mspdi(schedule: ScheduleProject) -> bytes:
     _add(root, "MinutesPerWeek", 10080)
     _add(root, "DaysPerMonth", 30)
     _add(root, "DefaultTaskType", 1)  # fixed duration
-    _add(root, "DurationFormat", ELAPSED_DAY)
+    _add(root, "DurationFormat", DAY)
     _add(root, "WorkFormat", 2)
     _add(root, "HonorConstraints", 1)
     _add(root, "NewTasksEffortDriven", 0)
@@ -127,8 +127,8 @@ def schedule_to_mspdi(schedule: ScheduleProject) -> bytes:
     _add(project_task, "OutlineLevel", 0)
     _add(project_task, "Start", _dt(schedule.project_start))
     _add(project_task, "Finish", _dt(finish))
-    _add(project_task, "Duration", _elapsed_duration((finish - schedule.project_start).days))
-    _add(project_task, "DurationFormat", ELAPSED_DAY)
+    _add(project_task, "Duration", _day_duration((finish - schedule.project_start).days))
+    _add(project_task, "DurationFormat", DAY)
     _add(project_task, "Summary", 1)
 
     for index, task in enumerate(schedule.tasks, start=1):
@@ -147,8 +147,10 @@ def schedule_to_mspdi(schedule: ScheduleProject) -> bytes:
         if task.finish:
             _add(node, "Finish", _dt(task.finish))
         if task.duration_days is not None:
-            _add(node, "Duration", _elapsed_duration(task.duration_days))
-            _add(node, "DurationFormat", ELAPSED_DAY)
+            _add(node, "Duration", _day_duration(task.duration_days))
+            _add(node, "DurationFormat", DAY)
+        if task.task_type != "summary":
+            _add(node, "CalendarUID", 1)
         _add(node, "Work", "PT0H0M0S")
         _add(node, "EffortDriven", 0)
         _add(node, "Recurring", 0)
@@ -163,7 +165,7 @@ def schedule_to_mspdi(schedule: ScheduleProject) -> bytes:
             # duration instead of Duration when no actual progress exists.
             _add(node, "ActualDuration", "PT0H0M0S")
             _add(node, "RegularWork", "PT0H0M0S")
-            _add(node, "RemainingDuration", _elapsed_duration(task.duration_days))
+            _add(node, "RemainingDuration", _day_duration(task.duration_days))
 
         # Явное SNET из IR может сочетаться с физическими предшественниками.
         # Для старых независимых календарных якорей сохраняется fallback.
@@ -178,12 +180,10 @@ def schedule_to_mspdi(schedule: ScheduleProject) -> bytes:
         )
         if explicit_snet or fallback_snet:
             _add(node, "ConstraintType", 4)
-            _add(node, "CalendarUID", 1)
             _add(node, "ConstraintDate", _dt(
                 task.constraint_date if explicit_snet else task.start))
         else:
             _add(node, "ConstraintType", 0)
-            _add(node, "CalendarUID", 1)
         # DEC-31 — аналитическая надстройка Excel/IR. В Deadline её переносить
         # нельзя: Microsoft Project включает дедлайны в расчёт общего резерва
         # и тем самым меняет критический путь. typGRP.md §2 прямо исключает
@@ -202,7 +202,7 @@ def schedule_to_mspdi(schedule: ScheduleProject) -> bytes:
             _add(pred, "Type", LINK_TYPE[link.type])
             _add(pred, "CrossProject", 0)
             _add(pred, "LinkLag", link.lag_days * TENTHS_OF_MINUTE_PER_DAY)
-            _add(pred, "LagFormat", ELAPSED_DAY)
+            _add(pred, "LagFormat", DAY)
 
     ET.indent(root, space="  ")
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
@@ -305,7 +305,7 @@ def export_mpp(ir_path: Path, mpp_path: Path, *, template_path: Path = DEFAULT_T
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Создать новый MPP из Schedule IR")
     parser.add_argument("ir", type=Path, help="Schedule IR v1.0 JSON")
-    parser.add_argument("mpp", type=Path, help="новый выходной .mpp")
+    parser.add_argument("mpp", type=Path, nargs="?", help="новый .mpp (по умолчанию в папке выдачи)")
     parser.add_argument("--template", type=Path, default=DEFAULT_TEMPLATE,
                         help="корпоративный шаблон .mpp")
     parser.add_argument("--timeout", type=int, default=300, help="таймаут COM, секунд")
@@ -315,6 +315,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        if args.mpp is None:
+            from output_paths import new_output_path
+            args.mpp = new_output_path(".mpp")
         report = export_mpp(args.ir, args.mpp, template_path=args.template,
                             timeout_seconds=args.timeout)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,28 @@ def test_vremennyy_kontur_finishiruet_vmeste_s_naruzhnoy_kladkoy(built):
     assert b.rows[vtk]["links"] == [(masonry, "ОО", 0)]
 
 
+def test_start_otdelki_uses_final_heat_date_after_network_recalculation(built):
+    """BND-OTD-002: SNET отделки сверяется с итоговым пуском тепла."""
+    b = built
+    nodes = b.schedule()
+    heat = b.one("Пуск тепла корпус", "К2")
+    partition = b.one("По договору Кладка перегородок", "К2")
+    finishing = b.one("По договору Вестибюль", "К2")
+    assert heat is not None and partition is not None and finishing is not None
+
+    s0 = nodes[b.rows[partition]["key"]].start + timedelta(days=90)
+    heat_date = nodes[b.rows[heat]["key"]].start
+    expected = (
+        min(heat_date, date(s0.year + 1, 4, 1))
+        if heat_date > date(s0.year, 10, 30)
+        else s0
+    )
+    actual = datetime.strptime(
+        b.rows[finishing]["constraint_date"], "%d.%m.%Y"
+    ).date()
+    assert actual == expected
+
+
 def test_pusk_tepla_imeet_tri_fakticheskih_predshestvennika(built):
     b = built
     heat = b.one("Пуск тепла корпус", "К2")
@@ -84,3 +107,26 @@ def test_pusk_tepla_k1_ssylaetsya_na_kontur_a_ne_na_vsyu_sistemu(built):
     predecessors = {pred for pred, _, _ in b.rows[heat]["links"]}
     assert loop in predecessors
     assert full not in predecessors
+
+
+@pytest.mark.parametrize("corpus", ["К1", "К2"])
+def test_facade_starts_ss_30_from_own_spk(built, corpus):
+    """BND-FAS-001: договор не должен преждевременно запускать фасад."""
+    b = built
+    facade = b.one("По договору Монтаж фасадов", corpus)
+    spk_rows = b.find(
+        "По договору Монтаж светопрозрачных конструкций",
+        corpus,
+        exact=False,
+    )
+    spk = next((i for i in spk_rows if "ПВХ" in b.rows[i]["name"]), None)
+    if spk is None:
+        spk = next((i for i in spk_rows if "Витраж" in b.rows[i]["name"]), None)
+    assert facade is not None and spk is not None
+    expected = (b.rows[spk]["key"], "НН", 30)
+    assert expected in b.rows[facade]["links"]
+
+    nodes = b.schedule()
+    assert nodes[b.rows[facade]["key"]].start == (
+        nodes[b.rows[spk]["key"]].start + timedelta(days=30)
+    )

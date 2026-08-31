@@ -50,6 +50,7 @@ class MPPTask:
     constraint_type: int
     constraint_date: date | None
     deadline: date | None
+    duration_text: str = ""
     predecessors: list[MPPLink] = field(default_factory=list)
 
 
@@ -138,6 +139,7 @@ def parse_mspdi(path: Path) -> MPPSnapshot:
             constraint_type=int(_text(node, "ConstraintType", "0")),
             constraint_date=_date(_text(node, "ConstraintDate")),
             deadline=_date(_text(node, "Deadline")),
+            duration_text="",
             predecessors=links,
         ))
     return MPPSnapshot(
@@ -185,6 +187,7 @@ def parse_com_snapshot(path: Path) -> MPPSnapshot:
             constraint_type=int(item["constraint_type"]),
             constraint_date=_date(item.get("constraint_date") or ""),
             deadline=_date(item.get("deadline") or ""),
+            duration_text=str(item.get("duration_text") or ""),
             predecessors=links,
         ))
     return MPPSnapshot(
@@ -275,6 +278,11 @@ def validate_snapshot(snapshot: MPPSnapshot) -> list[MPPIssue]:
         if task.milestone and (task.duration_minutes or 0) != 0:
             issues.append(MPPIssue("error", "MPP-MILESTONE-DURATION",
                                    "У вехи ненулевая длительность", **label))
+        if re.search(r"а(?=д(?:н|ень|ня|ней))", task.duration_text, re.IGNORECASE):
+            issues.append(MPPIssue(
+                "error", "MPP-ELAPSED-DURATION",
+                f"Использована астрономическая длительность: {task.duration_text}",
+                **label))
         if task.total_slack_minutes is not None and task.total_slack_minutes < 0:
             issues.append(MPPIssue("error", "MPP-NEGATIVE-SLACK",
                                    "Отрицательный общий резерв", **label))

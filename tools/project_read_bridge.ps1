@@ -38,7 +38,6 @@ try {
         throw "MS Project did not open the input MPP"
     }
     $calculationMode = [int]$projectApp.Calculation
-
     $tasks = [System.Collections.Generic.List[object]]::new()
     foreach ($task in $project.Tasks) {
         if ($null -eq $task) { continue }
@@ -52,6 +51,8 @@ try {
             start = Convert-ProjectDate $task.Start
             finish = Convert-ProjectDate $task.Finish
             duration_minutes = Convert-ProjectNumber $task.Duration
+            duration_text = [string]$task.DurationText
+            duration_calendar_days = [string]$task.DurationText
             percent_complete = [int]$task.PercentComplete
             critical = [bool]$task.Critical
             total_slack_minutes = Convert-ProjectNumber $task.TotalSlack

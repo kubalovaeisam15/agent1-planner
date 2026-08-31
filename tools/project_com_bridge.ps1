@@ -61,6 +61,12 @@ function Get-CollectionNames($collection) {
     return @($names | Sort-Object -Unique)
 }
 
+function Get-Utf8Text([string]$base64) {
+    return [System.Text.Encoding]::UTF8.GetString(
+        [System.Convert]::FromBase64String($base64)
+    )
+}
+
 function Get-CorporateObjects($project) {
     $reports = @()
     try { $reports = @(Get-CollectionNames $project.Reports) } catch { }
@@ -149,13 +155,54 @@ try {
     $durationOverrides = Get-Content -LiteralPath $durationsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $durationOverrideCount = 0
     $durationMismatchCount = 0
+    $durationField = $projectApp.FieldNameToFieldConstant("Duration", 0)
+    $calendarDaysName = Get-Utf8Text("MjQg0YfQsNGB0LAtMTEtMTM=")
+    if ($calendarDaysName -notin $templateCalendars) {
+        throw "Corporate 24-hour calendar not found: $calendarDaysName"
+    }
+    $project.HoursPerDay = 24
+    $project.HoursPerWeek = 168
     foreach ($entry in $durationOverrides) {
         $task = $project.Tasks.Item([int]$entry.id)
         if ($null -eq $task) { throw "Task for duration override not found: $($entry.id)" }
         $expectedDuration = [double]$entry.duration_minutes
+        $task.Calendar = $calendarDaysName
         $task.Duration = $expectedDuration
         $durationOverrideCount += 1
         if ([Math]::Abs(([double]$task.Duration) - $expectedDuration) -gt 0.01) { $durationMismatchCount += 1 }
+        if ([string]$task.DurationText -match "а(?=д(?:н|ень|ня|ней))") {
+            throw "Elapsed duration remained after calendar-day conversion: task $($entry.id)"
+        }
+    }
+
+    $durationColumn = $projectApp.FieldConstantToFieldName($durationField)
+    $corporateEntryTable = Get-Utf8Text(
+        "0JfQsNC/0LjRgdGMICjQutC+0YDQv9C+0YDQsNGC0LjQstC90YvQuSDRiNCw0LHQu9C+0L0p"
+    )
+    $durationColumnTitle = Get-Utf8Text(
+        "0JTQu9C40YLQtdC70YzQvdC+0YHRgtGM"
+    )
+    $durationFieldCandidates = [System.Collections.Generic.HashSet[int]]::new()
+    foreach ($fieldName in @("Duration", "DurationText")) {
+        try {
+            [void]$durationFieldCandidates.Add(
+                [int]$projectApp.FieldNameToFieldConstant($fieldName, 0)
+            )
+        } catch { }
+    }
+    $durationColumnCount = 0
+    $entryTable = $project.TaskTables.Item($corporateEntryTable)
+    if ($null -eq $entryTable) { throw "Corporate task table not found" }
+    foreach ($tableField in $entryTable.TableFields) {
+        if ($durationFieldCandidates.Contains([int]$tableField.Field)) {
+            $durationColumn = $projectApp.FieldConstantToFieldName([int]$tableField.Field)
+            $tableField.Title = $durationColumnTitle
+            $tableField.Width = 12
+            $durationColumnCount += 1
+        }
+    }
+    if ($durationColumnCount -eq 0) {
+        throw "Duration column not found in corporate task table"
     }
     # Microsoft PjCalculation: pjAutomatic = -1.
     try { $projectApp.Calculation = -1 } catch { }
@@ -180,6 +227,7 @@ try {
                 start = ([datetime]$task.Start).ToString("yyyy-MM-dd")
                 finish = ([datetime]$task.Finish).ToString("yyyy-MM-dd")
                 duration = [string]$task.DurationText
+                duration_calendar_days = [string]$task.DurationText
                 duration_minutes = [double]$task.Duration
                 predecessors = [string]$task.Predecessors
                 constraint_type = [int]$task.ConstraintType
@@ -231,6 +279,12 @@ try {
         task_count = $taskCount
         duration_override_count = $durationOverrideCount
         duration_mismatch_count = $durationMismatchCount
+        duration_display_field = $durationColumn
+        duration_display_table = $corporateEntryTable
+        duration_table_replacement_count = 0
+        duration_calendar = $calendarDaysName
+        duration_format_unit = 7
+        project_hours_per_day = [double]$project.HoursPerDay
         project_name = [string]$project.Name
         project_start = ([datetime]$project.ProjectStart).ToString("yyyy-MM-dd")
         project_finish = ([datetime]$project.ProjectFinish).ToString("yyyy-MM-dd")
@@ -251,6 +305,11 @@ try {
     }
     $report | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $reportPath -Encoding UTF8
     $exportSucceeded = $true
+}
+catch {
+    $line = $_.InvocationInfo.ScriptLineNumber
+    $source = $_.InvocationInfo.Line
+    throw "$($_.Exception.Message) (line ${line}: $source)"
 }
 finally {
     if ($null -ne $projectApp) {

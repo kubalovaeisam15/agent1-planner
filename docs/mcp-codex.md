@@ -14,7 +14,10 @@
 
 ## Ограничения безопасности MVP
 
-- доступны только пути внутри `D:\Claude\ClaudeVS\agent1`;
+- исходные ТЭП и шаблоны доступны внутри корня текущего репозитория; результаты
+  можно сохранять и читать также в `output_dir` из `context_preflight`;
+- `output_dir` — Desktop текущего пользователя или `<repo>/artifacts/output`
+  в облаке; выход за разрешённые каталоги, в том числе через ссылки, запрещён;
 - штатный расчёт начинается с `context_preflight` и не требует загрузки полных нормативов в контекст модели;
 - `schedule_build` и `mpp_export` повторяют preflight внутри операции и блокируют запись при расхождении;
 - существующие Excel, IR, MPP и JSON-отчёты не перезаписываются;
@@ -24,8 +27,10 @@
 
 ## Подключение в Codex
 
-В проект уже добавлен `.codex/config.toml` с локальным MCP-сервером типа
-**STDIO**. Codex загружает эту конфигурацию, когда проект отмечен доверенным.
+Локальную `.codex/config.toml` с MCP-сервером типа **STDIO** создаёт
+`setup/install.ps1` на каждом ПК. Абсолютные пути Python и репозитория берутся
+с текущей машины; этот файл не переносится через Git. Общие инструкции,
+скрипт установщика и шаблон hooks остаются в репозитории.
 Проверка выполняется из корня проекта:
 
 ```powershell
@@ -35,15 +40,15 @@ codex mcp list
 В списке должен появиться включённый сервер `agent1-ms-project`. Его параметры:
 
 - имя: `agent1-ms-project`;
-- команда: `C:\Users\Qbal\AppData\Local\Programs\Python\Python312\python.exe`;
-- аргумент: `D:\Claude\ClaudeVS\agent1\tools\mcp_server.py`.
+- команда: Python, найденный установщиком в PATH текущего ПК;
+- аргумент: абсолютный путь к `tools/mcp_server.py` в текущем репозитории.
 
 Фрагмент проектной конфигурации:
 
 ```toml
 [mcp_servers.agent1-ms-project]
-command = 'C:\Users\Qbal\AppData\Local\Programs\Python\Python312\python.exe'
-args = ['D:\Claude\ClaudeVS\agent1\tools\mcp_server.py']
+command = '<абсолютный путь к Python на этом ПК>'
+args = ['<абсолютный путь к репозиторию>/tools/mcp_server.py']
 startup_timeout_sec = 10
 tool_timeout_sec = 1800
 enabled = true
@@ -53,6 +58,15 @@ enabled = true
 попросите агента вызвать `context_preflight`. `schedule_build` и `mpp_export`
 проверяют IR внутри операции; отдельный `schedule_validate_ir` нужен при ошибке
 или аудите. После записи MPP запускайте `mpp_validate` с исходным IR.
+
+У `schedule_build` обязательным остаётся только `spec_path`: без выходных
+путей сервер создаёт Excel и IR с уникальными именами в `output_dir`.
+У `mpp_export` можно опустить `mpp_path`. JSON-отчёт `mpp_validate` сохраняется
+только при явном `report_path`; задавайте новый путь в том же `output_dir`.
+Явные относительные пути по-прежнему считаются от корня репозитория.
+Для облачного запуска задайте `AGENT1_RUNTIME=cloud` **в окружении процесса
+MCP-сервера**. Переменная, заданная только в другом терминале после запуска
+сервера, не меняет его окружение: перезапустите сервер. Полная схема — README.
 
 ## Ручная проверка сервера
 

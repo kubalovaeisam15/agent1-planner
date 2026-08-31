@@ -5,21 +5,21 @@
   "files": [
     {
       "path": "AGENTS.md",
-      "version": "7.7",
-      "version_marker": "Версия файла: 7.7",
-      "sha256": "7CD3286D3BC6018AE6EDF96A69621F9779F5F3E9BDD0BDAB9B3ABCE8C462FE40"
+      "version": "7.9",
+      "version_marker": "Версия файла: 7.9",
+      "sha256": "C9C4E557ABB92188046FC5DAB3300EF4733E305B3826C5C83FFB4D5820A3D769"
     },
     {
       "path": "CLAUDE.md",
-      "version": "7.7",
-      "version_marker": "Версия файла: 7.7",
-      "sha256": "46A1CD80C26C033E83BFEACE8E02FDD851B1B14A20E385E639EDE9662672F6E9"
+      "version": "7.8",
+      "version_marker": "Версия файла: 7.8",
+      "sha256": "05979F8A6D7A0270A94037A3DEF576C39F387A0A234A711355506FF3481C3BC9"
     },
     {
       "path": "instructions/agent-policy-full.md",
-      "version": "7.6",
-      "version_marker": "Версия файла: 7.6",
-      "sha256": "84A74AD90E8FAA5EE1D49AA85D267401E6B75B6F0C26A33BEC237E4C0FE2B997"
+      "version": "7.7",
+      "version_marker": "Версия файла: 7.7",
+      "sha256": "9C230E793A38CACC0C07D921A7E4897A99581A15F3C3756C6A1DD7D69F78CF14"
     },
     {
       "path": "instructions/typGRP.md",
@@ -42,12 +42,12 @@
     {
       "path": "tools/grp_model.py",
       "version": "compiled-rules",
-      "sha256": "FECE3887762C54994BAA73B9D5FE0218E63F71A0187DC09B3C435A112140C440"
+      "sha256": "0D7859BB928D455E7A0CC07553501C5CA0D08DAAF81FBFA614B77411BB6C2AB5"
     },
     {
       "path": "tools/build_grp.py",
       "version": "generator",
-      "sha256": "28C908850FA8E4A5E3B10BE39E2D78F131E6EE996760615C8EFA0A3F769DF532"
+      "sha256": "03530E73FFD42B29B149E6AAD02B07577C00E563440BC949B6B9F3D072F2FCFC"
     },
     {
       "path": "tests/project.template.json",
@@ -57,12 +57,17 @@
     {
       "path": "tests/template_parsed.json",
       "version": "wbs-skeleton",
-      "sha256": "6E96D3475B29543766C53286317BE152438CB83E15E1AD591DE4D53C2AFDEE57"
+      "sha256": "D6541F3535B816932A306B20C01A335B2E43232E34DB8BFC7201D1794CC77A2C"
     },
     {
       "path": "data/Шаблон ГРП.mpp",
       "version": "corporate-template",
-      "sha256": "613F11DF480890875ABAA559A639B9363DA1307BAACE4AFF050AFF3A718E3639"
+      "sha256": "CE1E363DBB8EA5B104D86EF658BEA12F66DC68A810589AAFCD0FC56DFDC45F82"
+    },
+    {
+      "path": "tools/output_paths.py",
+      "version": "output-routing",
+      "sha256": "B2C34717EE3BA66AD70E2170981F1C04721CFBCEB8E831D11149212241780AC1"
     }
   ]
 }

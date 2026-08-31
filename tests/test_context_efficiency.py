@@ -27,6 +27,7 @@ def test_manifest_covers_norms_runtime_and_template():
         "instructions/agent-policy-full.md",
         "tools/grp_model.py",
         "tools/build_grp.py",
+        "tools/output_paths.py",
         "tests/project.template.json",
         "tests/template_parsed.json",
         "data/Шаблон ГРП.mpp",

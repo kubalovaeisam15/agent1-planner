@@ -26,6 +26,7 @@ from mpp_validator import (
     validate_snapshot,
 )
 from mspdi_adapter import export_mpp
+from output_paths import get_output_dir, new_output_path
 from schedule_ir import ScheduleProject, validate_schedule_ir
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,7 +54,7 @@ def _schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
     }
 
 
-PATH = {"type": "string", "minLength": 1, "description": "Путь внутри корня проекта"}
+PATH = {"type": "string", "minLength": 1, "description": "Путь в репозитории; для результатов также абсолютный путь в текущей папке выдачи"}
 TIMEOUT = {
     "type": "integer", "minimum": 30, "maximum": 1800, "default": 300,
     "description": "Таймаут Microsoft Project COM в секундах",
@@ -91,7 +92,7 @@ TOOLS = [
             "spec_path": PATH,
             "xlsx_path": PATH,
             "ir_path": PATH,
-        }, ["spec_path", "xlsx_path", "ir_path"]),
+        }, ["spec_path"]),
         "annotations": {"readOnlyHint": False, "destructiveHint": False,
                         "idempotentHint": False, "openWorldHint": False},
     },
@@ -106,7 +107,7 @@ TOOLS = [
             "mpp_path": PATH,
             "template_path": PATH,
             "timeout_seconds": TIMEOUT,
-        }, ["ir_path", "mpp_path"]),
+        }, ["ir_path"]),
         "annotations": {"readOnlyHint": False, "destructiveHint": False,
                         "idempotentHint": False, "openWorldHint": False},
     },
@@ -128,22 +129,26 @@ TOOLS = [
 ]
 
 
-def _path(value: Any, *, suffix: str | None = None, exists: bool = True) -> Path:
+def _path(value: Any, *, suffix: str | None = None, exists: bool = True,
+          allow_output: bool = False) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ToolError("Путь должен быть непустой строкой")
     candidate = Path(value)
     if not candidate.is_absolute():
         candidate = ROOT / candidate
+    if not exists and candidate.is_symlink():
+        raise ToolError(f"Выходной файл уже существует (символическая ссылка): {candidate}")
     candidate = candidate.resolve()
-    try:
-        candidate.relative_to(ROOT)
-    except ValueError as exc:
-        raise ToolError(f"Путь вне корня проекта запрещён: {candidate}") from exc
+    roots = [ROOT.resolve()]
+    if allow_output:
+        roots.append(get_output_dir(ROOT, create=False))
+    if not any(candidate.is_relative_to(root) for root in roots):
+        raise ToolError(f"Путь вне корня проекта и разрешённой папки выдачи запрещён: {candidate}")
     if suffix and candidate.suffix.lower() != suffix:
         raise ToolError(f"Ожидается файл {suffix}: {candidate}")
     if exists and not candidate.is_file():
         raise ToolError(f"Файл не найден: {candidate}")
-    if not exists and candidate.exists():
+    if not exists and (candidate.exists() or candidate.is_symlink()):
         raise ToolError(f"Выходной файл уже существует: {candidate}")
     return candidate
 
@@ -156,7 +161,7 @@ def _timeout(arguments: dict[str, Any]) -> int:
 
 
 def _load_ir(path_value: Any) -> tuple[Path, ScheduleProject]:
-    path = _path(path_value, suffix=".json")
+    path = _path(path_value, suffix=".json", allow_output=True)
     try:
         schedule = ScheduleProject.from_json(path.read_text(encoding="utf-8"))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -246,6 +251,7 @@ def _context_preflight(arguments: dict[str, Any]) -> dict[str, Any]:
         "issues": issues[:MAX_INLINE_ISSUES],
         "issues_truncated": len(issues) > MAX_INLINE_ISSUES,
         "template_path": str(DEFAULT_MPP_TEMPLATE),
+        "output_dir": str(get_output_dir(ROOT, create=False)),
     }
 
 
@@ -299,8 +305,11 @@ def _schedule_validate_ir(arguments: dict[str, Any]) -> dict[str, Any]:
 def _schedule_build(arguments: dict[str, Any]) -> dict[str, Any]:
     _require_context_ready()
     spec = _path(arguments.get("spec_path"), suffix=".json")
-    xlsx = _path(arguments.get("xlsx_path"), suffix=".xlsx", exists=False)
-    ir = _path(arguments.get("ir_path"), suffix=".json", exists=False)
+    xlsx_value = (arguments["xlsx_path"] if "xlsx_path" in arguments
+                  else str(new_output_path(".xlsx", repo_root=ROOT)))
+    xlsx = _path(xlsx_value, suffix=".xlsx", exists=False, allow_output=True)
+    ir = _path(arguments.get("ir_path", str(xlsx.with_suffix(".ir.json"))),
+               suffix=".json", exists=False, allow_output=True)
     xlsx.parent.mkdir(parents=True, exist_ok=True)
     ir.parent.mkdir(parents=True, exist_ok=True)
     captured = io.StringIO()
@@ -330,7 +339,9 @@ def _mpp_export(arguments: dict[str, Any]) -> dict[str, Any]:
             f"Экспорт остановлен: Schedule IR содержит {len(issues)} ошибок; "
             "сначала вызовите schedule_validate_ir"
         )
-    mpp = _path(arguments.get("mpp_path"), suffix=".mpp", exists=False)
+    mpp_value = (arguments["mpp_path"] if "mpp_path" in arguments
+                 else str(new_output_path(".mpp", repo_root=ROOT)))
+    mpp = _path(mpp_value, suffix=".mpp", exists=False, allow_output=True)
     template_value = arguments.get("template_path")
     template = (_path(template_value, suffix=".mpp") if template_value is not None
                 else DEFAULT_MPP_TEMPLATE)
@@ -341,7 +352,7 @@ def _mpp_export(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def _mpp_validate(arguments: dict[str, Any]) -> dict[str, Any]:
-    mpp = _path(arguments.get("mpp_path"), suffix=".mpp")
+    mpp = _path(arguments.get("mpp_path"), suffix=".mpp", allow_output=True)
     snapshot = read_mpp(mpp, timeout_seconds=_timeout(arguments))
     issues = validate_snapshot(snapshot)
     ir_value = arguments.get("ir_path")
@@ -353,9 +364,10 @@ def _mpp_validate(arguments: dict[str, Any]) -> dict[str, Any]:
     report_path_value = arguments.get("report_path")
     report_path: Path | None = None
     if report_path_value is not None:
-        report_path = _path(report_path_value, suffix=".json", exists=False)
+        report_path = _path(report_path_value, suffix=".json", exists=False, allow_output=True)
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        with report_path.open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(report, ensure_ascii=False, indent=2))
     compact = {
         "mpp_path": str(mpp),
         "ir_path": str(ir_path) if ir_path else None,
@@ -416,7 +428,8 @@ def handle_request(message: dict[str, Any]) -> dict[str, Any] | None:
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
                 "instructions": (
-                    "Файлы только внутри agent1. Начните с context_preflight. "
+                    "Входы внутри agent1; результаты также в output_dir из context_preflight. "
+                    "Начните с context_preflight. Без путей schedule_build сохраняет Excel и IR в output_dir. "
                     "schedule_build и mpp_export сами проверяют IR; MPP всегда проверяйте mpp_validate."
                 ),
             }

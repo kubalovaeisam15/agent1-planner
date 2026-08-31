@@ -46,7 +46,8 @@ from grp_model import (  # noqa: E402
     pile_type_durations,
     seasonal_duration,
 )
-from schedule_ir import schedule_from_grp, validate_schedule_ir, write_schedule_ir  # noqa: E402
+from schedule_ir import schedule_from_grp, validate_schedule_ir  # noqa: E402
+from output_paths import new_output_path  # noqa: E402
 
 # Консоль Windows может быть в cp1251: не даём выводу падать на символах,
 # которых нет в её кодировке (стрелки, типографика).
@@ -1225,7 +1226,11 @@ class Build:
                 pvc_finish=pvc_fin, stained_finish=st_fin, facade_finish=fac_fin,
                 fit_base=base, fit_base_label=base_label,
                 itp_finish=itp_finish, heat_loop_finish=loop_finish,
-                masonry_finish=(nodes[self.rows[ext]["key"]].finish
+                # Наружная кладка окончательно привязана к ЯКОРЮ ниже через
+                # finish_at_anchor(). Для сезонного гейта сразу используем ту
+                # же итоговую формулу, а не промежуточную дату из nodes,
+                # рассчитанную до перенастройки корпуса.
+                masonry_finish=(anchor + timedelta(days=Bnd.FIN_MASONRY_EXT[0])
                                 if ext is not None else None),
             )
             self.assumptions.extend(
@@ -1364,9 +1369,44 @@ class Build:
             finish_at_anchor(pvc, pvc_off, "СПК ПВХ", Bnd.FIN_PVC[1])
             finish_at_anchor(stained, Bnd.FIN_STAINED[0], "Витражи", Bnd.FIN_STAINED[1])
             fac = self.one("По договору Монтаж фасадов", pref)
-            finish_at_anchor(fac, fac_days, "Монтаж фасадов",
-                             Bnd.FIN_FACADE[1] if fac_days == Bnd.FIN_FACADE[0]
-                             else Bnd.FIN_FACADE_MODULAR[1])
+            if fac is not None:
+                # BND-FAS-001/002: фасад стартует НН +30 от СПК. Связь
+                # договора из типового графика сохраняется как дополнительный
+                # физический предшественник; она не должна подменять связь от
+                # монтажа светопрозрачных конструкций.
+                facade_src = pvc if pvc is not None else stained
+                if facade_src is None:
+                    # При отсутствии СПК BND-FAS-001 задаёт тот же лаг от
+                    # ЯКОРЬ_ОГР. Его источник — наружная кладка либо кровля.
+                    facade_src = ext if ext is not None else roof
+                facade_src_key = self.rows[facade_src]["key"]
+                facade_start = max(
+                    nodes[self.rows[fac]["key"]].start,
+                    nodes[facade_src_key].start
+                    + timedelta(days=Bnd.LAG_PVC_FACADE[0]),
+                )
+                facade_link = (facade_src_key, "НН", Bnd.LAG_PVC_FACADE[0])
+                if facade_link not in self.rows[fac]["links"]:
+                    self.rows[fac]["links"].append(facade_link)
+                self.rows[fac]["tpl_start"] = ""
+
+                facade_duration = (fac_fin - facade_start).days
+                if facade_duration > 0:
+                    self.rows[fac]["dur"] = facade_duration
+                    self.rows[fac]["comment"] = (
+                        f"Монтаж фасадов: старт НН +{Bnd.LAG_PVC_FACADE[0]} дн "
+                        f"от СПК; финиш ЯКОРЬ +{fac_days} дн — "
+                        + (Bnd.FIN_FACADE[1] if fac_days == Bnd.FIN_FACADE[0]
+                           else Bnd.FIN_FACADE_MODULAR[1])
+                    )
+                else:
+                    self.note(
+                        "BND-FAS-001/002",
+                        f"{corpus['код']}: расчётный финиш фасадов "
+                        f"({dfmt(fac_fin)}) не позже нормативного старта "
+                        f"({dfmt(facade_start)}); длительность шаблона сохранена.",
+                        corpus["код"],
+                    )
 
             # --- ВИС: длительность выводится из финиша ЯКОРЬ +330 (DEC-23) ---
             vis_heads = ["Внутренние сантехнические системы", "Отопление",
@@ -1739,7 +1779,8 @@ def write_excel(path: Path, rows: list[dict], build: Build) -> None:
     wsc["A2"].alignment = Alignment(wrap_text=True, vertical="top")
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(path)
+    with path.open("xb") as stream:
+        wb.save(stream)
     return [c for c in checks if not c[2]]
 
 
@@ -1763,8 +1804,8 @@ def critical_task_count(nodes: dict[str, Node], summaries: set[str]) -> int:
 def parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Собрать ГРП в Excel")
     parser.add_argument("spec", type=Path, help="JSON с параметрами проекта")
-    parser.add_argument("out", type=Path, nargs="?", default=Path("out/ГРП.xlsx"),
-                        help="выходной Excel (по умолчанию out/ГРП.xlsx)")
+    parser.add_argument("out", type=Path, nargs="?", default=None,
+                        help="выходной Excel (по умолчанию новое имя на Desktop или в artifacts/output)")
     parser.add_argument("--ir", type=Path, default=None,
                         help="дополнительно записать Schedule IR v1.0 в JSON")
     return parser.parse_args(argv)
@@ -1775,12 +1816,22 @@ def main(argv: list[str] | None = None) -> int:
     spec = args.spec
     if not spec.is_absolute():
         spec = ROOT / spec
-    out = args.out
+    out = args.out if args.out is not None else new_output_path(".xlsx", repo_root=ROOT)
     if not out.is_absolute():
         out = ROOT / out
     ir_out = args.ir
+    if args.out is None and ir_out is None:
+        ir_out = out.with_suffix(".ir.json")
     if ir_out is not None and not ir_out.is_absolute():
         ir_out = ROOT / ir_out
+
+    if ir_out is not None and out.resolve() == ir_out.resolve():
+        print("Excel и Schedule IR должны иметь разные пути", file=sys.stderr)
+        return 1
+    for destination in (out, ir_out):
+        if destination is not None and (destination.exists() or destination.is_symlink()):
+            print(f"Выходной файл уже существует: {destination}", file=sys.stderr)
+            return 1
 
     project = json.loads(spec.read_text(encoding="utf-8"))
     b = Build(project)
@@ -1827,7 +1878,8 @@ def main(argv: list[str] | None = None) -> int:
     failed = write_excel(out, rows, b)
     if ir_out is not None and schedule_ir is not None:
         ir_out.parent.mkdir(parents=True, exist_ok=True)
-        write_schedule_ir(ir_out, schedule_ir)
+        with ir_out.open("x", encoding="utf-8") as stream:
+            stream.write(schedule_ir.to_json() + "\n")
 
     finish = max(n.finish for n in nodes.values() if n.finish)
     crit = critical_task_count(nodes, b.summaries())

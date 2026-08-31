@@ -8,3 +8,36 @@ packages/
 .codex/hooks.json
 .mcp.json
 ~$*.xlsx
+
+# Generated results and temporary work (never shared through Git)
+/artifacts/output/
+/work/
+/tmp/
+/temp/
+/.test-tmp*/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+*.tmp
+*.temp
+*.bak
+*.py[cod]
+venv/
+env/
+node_modules/
+
+# Secrets and machine-specific configuration; templates stay versioned
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+/secrets/
+credentials*.json
+/.codex/config.toml
+/.claude/settings.local.json
+.DS_Store
+Thumbs.db
