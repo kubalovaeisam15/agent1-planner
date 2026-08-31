@@ -16,6 +16,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from grp_model import dparse, parse_links
+from shared_sections import shared_section_errors
 
 SCHEMA_VERSION = "1.0"
 LINK_TYPES = {"FS", "SS", "FF", "SF"}
@@ -218,6 +219,8 @@ def schedule_from_grp(project: dict[str, Any], rows: list[dict[str, Any]]) -> Sc
 def validate_schedule_ir(schedule: ScheduleProject) -> list[IRIssue]:
     """Проверяет контракт и ссылочную целостность IR без пересчёта дат."""
     issues: list[IRIssue] = []
+    issues.extend(IRIssue("IR-SHARED-SECTION", message) for message in
+                  shared_section_errors((t.name, t.outline_level) for t in schedule.tasks))
     if schedule.schema_version != SCHEMA_VERSION:
         issues.append(IRIssue("IR-SCHEMA", f"Ожидалась версия {SCHEMA_VERSION}"))
     if schedule.project_start is None:

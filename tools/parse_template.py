@@ -2,7 +2,7 @@
 """Разбор «Шаблон_ГРП v2.xlsx» в машинный вид + сверка статистики typGRP.md §3.
 
 Выход:
-  tests/template_parsed.json  — 1 672 задачи в порядке обхода дерева
+  tests/template_parsed.json  — задачи в порядке обхода дерева
   печать отчёта сверки в stdout
 
 Отличие от версии для шаблона v1: колонки «СДР» больше нет, «Уровень структуры»
@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 import openpyxl
+from shared_sections import shared_section_errors
 
 # Консоль Windows может быть в cp1251: не даём выводу падать на символах,
 # которых нет в её кодировке (стрелки, типографика).
@@ -38,12 +39,12 @@ COLUMNS = [name for name in SOURCE_COLUMNS if name != "Критическая з
 
 # Заявлено в typGRP.md §3 — сверяем, а не доверяем.
 DECLARED = {
-    "всего задач": 1673,
+    "всего задач": 1677,
     "вех": 293,
-    "со связями": 1220,
+    "со связями": 1228,
     "с комментариями": 260,
-    "суммарных строк": 420,
-    "уровни": {1: 18, 2: 84, 3: 280, 4: 636, 5: 336, 6: 174, 7: 88, 8: 57},
+    "суммарных строк": 421,
+    "уровни": {1: 17, 2: 79, 3: 286, 4: 640, 5: 336, 6: 174, 7: 88, 8: 57},
 }
 
 
@@ -75,6 +76,13 @@ def load() -> list[dict]:
         rec["Уровень структуры"] = int(rec["Уровень структуры"])
         rec["Название задачи"] = rec["Название задачи"].strip()
         tasks.append(rec)
+    wb.close()
+    errors = shared_section_errors(
+        ((t["Название задачи"], t["Уровень структуры"]) for t in tasks),
+        require_all=True,
+    )
+    if errors:
+        raise ValueError("\n".join(errors))
     return tasks
 
 
@@ -174,13 +182,16 @@ def report(tasks: list[dict]) -> int:
 
 def main() -> int:
     tasks = load()
+    # Не заменять проверенный каркас, если изменился контракт источника.
+    if report(tasks):
+        return 1
     DST.parent.mkdir(exist_ok=True)
     DST.write_text(
         json.dumps(tasks, ensure_ascii=False, indent=1),
-        encoding="utf-8",
+        encoding="utf-8", newline="\n",
     )
     print(f"Записано: {DST.relative_to(ROOT)} ({len(tasks)} задач)\n")
-    return 1 if report(tasks) else 0
+    return 0
 
 
 if __name__ == "__main__":

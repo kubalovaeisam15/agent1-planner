@@ -9,6 +9,7 @@ import pytest
 
 import build_grp
 from schedule_ir import schedule_from_grp, validate_schedule_ir
+from shared_sections import PROJECT_SHARED_SECTIONS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture(scope="module")
 def corrected_schedule():
     project = json.loads(
-        (ROOT / "out" / "Тестовый1_ТЭП_20260829.json").read_text(encoding="utf-8"))
+        (ROOT / "tests" / "regression_two_corpuses.json").read_text(encoding="utf-8"))
     b = build_grp.Build(project)
     b.load_skeleton()
     b.check_stages()
@@ -88,3 +89,17 @@ def test_dec38_dd_constraint_equals_mz_project_start(corrected_schedule):
     assert task.constraint_type == "start_no_earlier_than"
     assert task.constraint_date == corrected_schedule.project_start
     assert task.start == corrected_schedule.project_start
+
+
+def test_dec40_shared_closeout_uses_both_corpuses(corrected_schedule):
+    tasks = corrected_schedule.tasks
+    for name in PROJECT_SHARED_SECTIONS:
+        matches = [task for task in tasks if task.name == name]
+        assert len(matches) == 1
+        assert matches[0].outline_level == 1
+    bti = [task for task in tasks if task.name == "Готовность к обмерам БТИ"]
+    assert len(bti) == 1
+    by_id = {task.task_id: task for task in tasks}
+    predecessors = [by_id[link.predecessor_id].name for link in bti[0].predecessors]
+    assert any(name.startswith("К1. ") for name in predecessors)
+    assert any(name.startswith("К2. ") for name in predecessors)

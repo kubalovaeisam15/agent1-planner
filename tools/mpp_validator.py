@@ -16,6 +16,7 @@ from xml.etree import ElementTree as ET
 
 from grp_model import parse_links
 from schedule_ir import ScheduleProject
+from shared_sections import shared_section_errors
 
 NS = "http://schemas.microsoft.com/project"
 NAMESPACES = {"p": NS}
@@ -248,6 +249,8 @@ def _ancestor_map(tasks: list[MPPTask]) -> dict[int, tuple[int, ...]]:
 def validate_snapshot(snapshot: MPPSnapshot) -> list[MPPIssue]:
     """Проверяет структуру и качество сети независимо от исходного IR."""
     issues: list[MPPIssue] = []
+    issues.extend(MPPIssue("error", "MPP-SHARED-SECTION", message) for message in
+                  shared_section_errors((t.name, t.outline_level) for t in snapshot.tasks))
     if snapshot.calculation_mode is not None and snapshot.calculation_mode != -1:
         issues.append(MPPIssue(
             "error", "MPP-CALCULATION-MODE",

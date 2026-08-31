@@ -5,27 +5,27 @@
   "files": [
     {
       "path": "AGENTS.md",
-      "version": "7.9",
-      "version_marker": "Версия файла: 7.9",
-      "sha256": "C9C4E557ABB92188046FC5DAB3300EF4733E305B3826C5C83FFB4D5820A3D769"
+      "version": "7.10",
+      "version_marker": "Версия файла: 7.10",
+      "sha256": "7E5984F431D4709B1F3DD4B17E4DB65777EE05C83D6244244ACEF27783FF9078"
     },
     {
       "path": "CLAUDE.md",
-      "version": "7.8",
-      "version_marker": "Версия файла: 7.8",
-      "sha256": "05979F8A6D7A0270A94037A3DEF576C39F387A0A234A711355506FF3481C3BC9"
+      "version": "7.9",
+      "version_marker": "Версия файла: 7.9",
+      "sha256": "9AA78C292067E5B7960DB0EA128C150320620FD62BA387F35FA9DE0878887283"
     },
     {
       "path": "instructions/agent-policy-full.md",
-      "version": "7.7",
-      "version_marker": "Версия файла: 7.7",
-      "sha256": "9C230E793A38CACC0C07D921A7E4897A99581A15F3C3756C6A1DD7D69F78CF14"
+      "version": "7.8",
+      "version_marker": "Версия файла: 7.8",
+      "sha256": "FC359D90B33DAB16BA47AE8E2AFF897A0EF6B272E827E17E97D6C86756C83EF6"
     },
     {
       "path": "instructions/typGRP.md",
-      "version": "4.5",
-      "version_marker": "Версия v4.5",
-      "sha256": "B160E262A4CCDDFB90C532CE0D80BA31EABD76335BDEBB96394147FA1D892943"
+      "version": "4.6",
+      "version_marker": "Версия v4.6",
+      "sha256": "570794B3165404D99A74F27EE1AE154B87A62741C955C7ABC5FF6BAC48051F59"
     },
     {
       "path": "instructions/bindings.md",
@@ -47,7 +47,7 @@
     {
       "path": "tools/build_grp.py",
       "version": "generator",
-      "sha256": "03530E73FFD42B29B149E6AAD02B07577C00E563440BC949B6B9F3D072F2FCFC"
+      "sha256": "741C89F36AC0469B0DF0A1BD9AC728F0533EFAC916E58E1141F9EFABD4F521BF"
     },
     {
       "path": "tests/project.template.json",
@@ -57,7 +57,7 @@
     {
       "path": "tests/template_parsed.json",
       "version": "wbs-skeleton",
-      "sha256": "D6541F3535B816932A306B20C01A335B2E43232E34DB8BFC7201D1794CC77A2C"
+      "sha256": "6A5E5B0BB1CD7A8ECA1C5FC118F21D8029069E41A64FC2270D849B6F7DBD1AB4"
     },
     {
       "path": "data/Шаблон ГРП.mpp",
@@ -68,6 +68,31 @@
       "path": "tools/output_paths.py",
       "version": "output-routing",
       "sha256": "B2C34717EE3BA66AD70E2170981F1C04721CFBCEB8E831D11149212241780AC1"
+    },
+    {
+      "path": "instructions/Шаблон_ГРП v2.xlsx",
+      "version": "structural-template",
+      "sha256": "548609DA8646040C5D532FE7B3569FF188F3CC2C5370FD229C25319C7347CDD0"
+    },
+    {
+      "path": "tools/shared_sections.py",
+      "version": "shared-sections-DEC-40",
+      "sha256": "21E309502A55116E0CB1ECEDEF1B242D578CCA43567C4E3FEB1BC8C2B70D972B"
+    },
+    {
+      "path": "tools/parse_template.py",
+      "version": "template-parser",
+      "sha256": "EA4C3CED5F400BF7384FCE68101E781645881CA7D9D2C7353BEA6837F6256FBA"
+    },
+    {
+      "path": "tools/schedule_ir.py",
+      "version": "ir-validator",
+      "sha256": "864A37C8B4DFEC95D6BCE914A43506F8B8FEA9F5B8615FF1ADAA90644282B4A0"
+    },
+    {
+      "path": "tools/mpp_validator.py",
+      "version": "mpp-validator",
+      "sha256": "FE4BD2EA2B4F12885FB5DB6FA76782C156D8AB62E8ADB3842C2C9584CD6788F5"
     }
   ]
 }

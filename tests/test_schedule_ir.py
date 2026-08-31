@@ -38,7 +38,7 @@ def build_ir() -> ScheduleProject:
 def test_etalon_converts_to_valid_ir():
     schedule = build_ir()
     assert schedule.schema_version == "1.0"
-    assert len(schedule.tasks) == 1677
+    assert len(schedule.tasks) == 1681  # 1677 строк актуального источника + 4 расчётные строки
     assert validate_schedule_ir(schedule) == []
     assert {link.type for task in schedule.tasks for link in task.predecessors} <= {
         "FS", "SS", "FF", "SF",

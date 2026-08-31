@@ -27,7 +27,7 @@ def sample_schedule() -> ScheduleProject:
     )
 
 
-def test_mspdi_preserves_wbs_elapsed_duration_and_link_without_reserve_deadline():
+def test_mspdi_preserves_wbs_calendar_duration_and_link_without_reserve_deadline():
     root = ET.fromstring(schedule_to_mspdi(sample_schedule()))
     ns = {"p": NS}
     tasks = root.findall("p:Tasks/p:Task", ns)
@@ -36,7 +36,7 @@ def test_mspdi_preserves_wbs_elapsed_duration_and_link_without_reserve_deadline(
     milestone = tasks[3]
     assert work.findtext("p:OutlineNumber", namespaces=ns) == "1.1"
     assert work.findtext("p:Duration", namespaces=ns) == "P5D"
-    assert work.findtext("p:DurationFormat", namespaces=ns) == "8"
+    assert work.findtext("p:DurationFormat", namespaces=ns) == "7"
     assert work.findtext("p:ActualDuration", namespaces=ns) == "PT0H0M0S"
     assert work.findtext("p:RemainingDuration", namespaces=ns) == "P5D"
     assert milestone.findtext("p:Milestone", namespaces=ns) == "1"
@@ -44,8 +44,8 @@ def test_mspdi_preserves_wbs_elapsed_duration_and_link_without_reserve_deadline(
     link = milestone.find("p:PredecessorLink", ns)
     assert link is not None
     assert link.findtext("p:Type", namespaces=ns) == "1"  # FS
-    assert link.findtext("p:LinkLag", namespaces=ns) == "28800"  # 2 elapsed days
-    assert link.findtext("p:LagFormat", namespaces=ns) == "8"
+    assert link.findtext("p:LinkLag", namespaces=ns) == "28800"  # 2 calendar days
+    assert link.findtext("p:LagFormat", namespaces=ns) == "7"
 
 
 def test_mspdi_adds_snet_only_to_independent_calendar_anchor():

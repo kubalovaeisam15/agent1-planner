@@ -186,6 +186,13 @@ class Build:
     # ==================================================================
     def load_skeleton(self) -> None:
         raw = json.loads(SKELETON.read_text(encoding="utf-8"))
+        from shared_sections import shared_section_errors
+        errors = shared_section_errors(
+            ((row["Название задачи"], int(row["Уровень структуры"])) for row in raw),
+            require_all=True,
+        )
+        if errors:
+            raise ValueError("\n".join(errors))
         # В актуальном Excel встречаются разрывы и дубли исходных Ид. Внутренний
         # ключ поэтому строится по физической позиции строки; ссылки по Ид.
         # разрешаются в ближайшую предшествующую строку с таким Ид. (иначе —

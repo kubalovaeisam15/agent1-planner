@@ -61,7 +61,7 @@ def test_context_preflight_verifies_compiled_context():
     assert content["ready"] is True
     assert content["agent_policy_version"] == "7.5"
     assert content["issue_count"] == 0
-    assert len(content["verified"]) == 12
+    assert len(content["verified"]) == 17
     assert all(item["verified"] for item in content["verified"])
     assert content["template_path"].endswith("Шаблон ГРП.mpp")
 
