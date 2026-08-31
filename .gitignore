@@ -3,7 +3,9 @@ __pycache__/
 .venv/
 out/
 outputs/
-data/
+# Keep the required corporate template; ignore other local data.
+/data/*
+!/data/Шаблон ГРП.mpp
 packages/
 .codex/hooks.json
 .mcp.json
