@@ -62,7 +62,7 @@
     {
       "path": "data/Шаблон ГРП.mpp",
       "version": "corporate-template",
-      "sha256": "CE1E363DBB8EA5B104D86EF658BEA12F66DC68A810589AAFCD0FC56DFDC45F82"
+      "sha256": "67AD7031E53CAA48860B707F38CB15A2C4E395064A44A26173776CCA523951DD"
     },
     {
       "path": "tools/output_paths.py",
