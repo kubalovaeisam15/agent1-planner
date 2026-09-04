@@ -92,6 +92,25 @@ def test_context_preflight_detects_hash_mismatch(tmp_path, monkeypatch):
     assert not ir.exists()
 
 
+def test_context_preflight_accepts_current_corporate_template_hash(tmp_path, monkeypatch):
+    manifest = json.loads(mcp_server.CONTEXT_MANIFEST.read_text(encoding="utf-8"))
+    template = next(item for item in manifest["files"]
+                    if item["path"] == "data/Шаблон ГРП.mpp")
+    template["sha256"] = "0" * 64
+    changed = tmp_path / "context-manifest.json"
+    changed.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "CONTEXT_MANIFEST", changed)
+
+    result = mcp_server.call_tool("context_preflight", {})["structuredContent"]
+    accepted = next(item for item in result["verified"]
+                    if item["path"] == "data/Шаблон ГРП.mpp")
+    assert result["ready"] is True
+    assert result["issue_count"] == 0
+    assert accepted["verified"] is True
+    assert accepted["accepted_current_template"] is True
+    assert accepted["policy"] == "DEC-41"
+
+
 def test_notification_has_no_response():
     assert mcp_server.handle_request({
         "jsonrpc": "2.0", "method": "notifications/initialized",

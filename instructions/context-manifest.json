@@ -5,9 +5,9 @@
   "files": [
     {
       "path": "AGENTS.md",
-      "version": "7.10",
-      "version_marker": "Версия файла: 7.10",
-      "sha256": "7E5984F431D4709B1F3DD4B17E4DB65777EE05C83D6244244ACEF27783FF9078"
+      "version": "7.11",
+      "version_marker": "Версия файла: 7.11",
+      "sha256": "3586DA72DDF95F889DD16FAC2C527859EC46E00413A70F434819D13AAC7C6471"
     },
     {
       "path": "CLAUDE.md",
@@ -17,21 +17,21 @@
     },
     {
       "path": "instructions/agent-policy-full.md",
-      "version": "7.8",
-      "version_marker": "Версия файла: 7.8",
-      "sha256": "FC359D90B33DAB16BA47AE8E2AFF897A0EF6B272E827E17E97D6C86756C83EF6"
+      "version": "7.9",
+      "version_marker": "Версия файла: 7.9",
+      "sha256": "40BF0947A80647B3F2054537B99E6FB67BA14A966FD3F335647CA8322D17F657"
     },
     {
       "path": "instructions/typGRP.md",
       "version": "4.6",
       "version_marker": "Версия v4.6",
-      "sha256": "570794B3165404D99A74F27EE1AE154B87A62741C955C7ABC5FF6BAC48051F59"
+      "sha256": "76A7B027184CE2F44D8F62F781E0BEC55958EA348EC3AA859DF11FD2596F245E"
     },
     {
       "path": "instructions/bindings.md",
       "version": "3.3",
       "version_marker": "Версия v3.3",
-      "sha256": "497B879D14C83C193F54FF6F491EA7C108D887FF1309F8D60AD54C33A5CB25D2"
+      "sha256": "C1D79C414C2683684B820A2A56804155ECD45C20AB8A772E63BD39FE69E5071D"
     },
     {
       "path": "instructions/standards.md",
@@ -47,7 +47,7 @@
     {
       "path": "tools/build_grp.py",
       "version": "generator",
-      "sha256": "741C89F36AC0469B0DF0A1BD9AC728F0533EFAC916E58E1141F9EFABD4F521BF"
+      "sha256": "B85D64424AA9086583E24425A207CF8B0D0087B11D49A7B0EE6E54597E38653E"
     },
     {
       "path": "tests/project.template.json",
@@ -62,7 +62,7 @@
     {
       "path": "data/Шаблон ГРП.mpp",
       "version": "corporate-template",
-      "sha256": "67AD7031E53CAA48860B707F38CB15A2C4E395064A44A26173776CCA523951DD"
+      "sha256": "9F4F6AE56D68139384124600AFB5D826C21863A5ED96CCD14A6FDD7825AAF850"
     },
     {
       "path": "tools/output_paths.py",

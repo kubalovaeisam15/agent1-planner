@@ -116,6 +116,14 @@ class Build:
         self.fit_tasks: list[tuple[str, str]] = []  # (ключ задачи отделки, код объекта)
         self.parking_prefix: str | None = None
         self._reserve_base: date | None = None
+        for corpus in project.get("корпуса", []):
+            for field, value in (("секций", "1"), ("сложный_конструктив", "не применяется, K = 6")):
+                if field not in corpus:
+                    self.note("standards.md §3", f"{field}: принято умолчание {value}.", corpus["код"])
+        if "ограждение_котлована" not in project.get("нулевой_цикл", {}):
+            self.note("standards.md §3", "Тип ограждения котлована не задан: принят трубошпунт.")
+        if "доля_квартир_с_чистовой" not in project.get("отделка", {}):
+            self.note("standards.md §3", "Доля квартир с чистовой отделкой не задана: принято 1,0.")
 
     # -- служебное ------------------------------------------------------
     def note(self, code: str, text: str, scope: str = "") -> None:
@@ -258,6 +266,10 @@ class Build:
                 "name": name,
                 "dur": self._dur(r["Длительность"]),
                 "links": links,
+                # Исходные связи нужны после нормативной перепривязки СМР:
+                # по ним определяется, к какому договору относилась работа в
+                # корпоративном шаблоне. В расчёт узла входит только `links`.
+                "tpl_links": list(links),
                 "comment": r["комментарий"],
                 "tpl_start": r["Начало"],
                 "constraint_type": r.get("Тип ограничения", "Как можно раньше"),
@@ -489,6 +501,9 @@ class Build:
                 clone = dict(r)
                 clone["key"] = keymap[r["key"]]
                 clone["links"] = [(keymap.get(t, t), k, lg) for t, k, lg in r["links"]]
+                clone["tpl_links"] = [
+                    (keymap.get(t, t), k, lg) for t, k, lg in r.get("tpl_links", r["links"])
+                ]
                 if r is proto[0]:
                     clone["name"] = f"Корпус {n} ( {corpus['этажей_надземных']} этажей )"
                 else:
@@ -647,6 +662,16 @@ class Build:
         if self.p.get("паркинг", {}).get("есть", False):
             return
 
+        # У отсутствующего паркинга нет собственной плиты и подземного
+        # монолита. Покорпусные строки внутри того же блока сохраняются.
+        parking_only = [j for j in kids
+                        if strip_prefix(self.rows[j]["name"])[0].startswith("П")
+                        and (strip_prefix(self.rows[j]["name"])[1] == "По договору Фундаменты Паркинг"
+                             or ("По договору Монолитные конструкции ниже отм 0,000" in self.rows[j]["name"]
+                                 and "Паркинг" in self.rows[j]["name"]))]
+        self.drop_rows(parking_only, "ТЭП: паркинг отсутствует, его ФП и подземный монолит неприменимы")
+        i, kids = self.object_blocks()[park_name]
+
         # Сохраняются блоки, которые в шаблоне лежат в паркинге, но относятся ко
         # всей очереди: общий нулевой цикл, кладка (точка КЛ_ПАРК), ИТП и отделка
         # техпомещений (от неё отсчитывается монтаж ИТП).
@@ -672,7 +697,11 @@ class Build:
             row = self.rows[j]
             root = max((r for r in roots if r <= j), default=None)
             row["lvl"] += shift.get(root, 0)
-            row["name"] = f"{target}. {strip_prefix(row['name'])[1]}"
+            original_prefix, bare_name = strip_prefix(row["name"])
+            # DEC-36: общий блок переносится в К1, но принадлежность
+            # покорпусных плит и монолита К2 и следующих корпусов сохраняется.
+            if not original_prefix.startswith("К"):
+                row["name"] = f"{target}. {bare_name}"
             kept.append(row)
 
         del self.rows[i:i + 1 + len(kids)]
@@ -680,12 +709,41 @@ class Build:
         pos = corpus1 if corpus1 is not None else 0
         self.rows[pos:pos] = kept
         self.parking_prefix = target
+        # DEC-06 / R-05: без паркинга ИТП размещается в каждом корпусе.
+        # Копируем сохранённые типовые блоки техпомещений и их кладки;
+        # внутренние связи и ссылки на конструкции корпуса остаются покорпусными.
+        ancillary_names = {"Общестроительные работы", "ЦТП, ИТП с УУТЭ", "Технические помещения"}
+        ancillary_roots = [j for j, row in enumerate(self.rows)
+                           if strip_prefix(row["name"])[0] == target
+                           and strip_prefix(row["name"])[1] in ancillary_names]
+        prototype = [dict(self.rows[j], links=list(self.rows[j]["links"]))
+                     for j in sorted({k for root in ancillary_roots
+                                      for k in [root, *self.subtree(root)]})]
+        for pref in list(self.corpus_prefix.values())[1:]:
+            keymap = {row["key"]: self.newkey() for row in prototype}
+            by_name = {row["name"]: row["key"] for row in self.rows}
+            for row in self.rows:
+                if row["name"].startswith(f"{target}. "):
+                    matching = f"{pref}. {strip_prefix(row['name'])[1]}"
+                    if matching in by_name:
+                        keymap.setdefault(row["key"], by_name[matching])
+            clones = [dict(row, key=keymap[row["key"]],
+                           name=f"{pref}. {strip_prefix(row['name'])[1]}",
+                           links=list(dict.fromkeys((keymap.get(t, t), kind, lag)
+                                                   for t, kind, lag in row["links"])))
+                      for row in prototype]
+            insert_at = self.one("Надземная часть здания", pref)
+            if insert_at is None:
+                raise SystemExit(f"Не найден блок {pref} для размещения ИТП без паркинга")
+            self.rows[insert_at:insert_at] = clones
         self.note("R-05 / R-08",
                   f"Паркинг в проекте отсутствует. Шаблон v2 такого варианта не содержит: общий "
                   f"нулевой цикл, ИТП и точка отсчёта отделки КЛ_ПАРК живут в блоке паркинга. "
-                  f"Сохранённые блоки перенесены в корпус К1 с его префиксом, {dropped} задач "
+                  f"Общий нулевой цикл перенесён в К1 с сохранением префиксов покорпусных плит; "
+                  f"ИТП и обеспечивающие блоки техпомещений развёрнуты по корпусам (DEC-06). {dropped} задач "
                   f"паркинга (автостоянка, кладовые, МОП подземного уровня) сняты. Точка КЛ_ПАРК "
-                  f"заменена на ЯКОРЬ_ОГР корпуса. Требует правил владельца.")
+                  f"заменена на ЯКОРЬ_ОГР корпуса. Применена адаптация типовых блоков; "
+                  f"компоновку ИТП и техпомещений должен проверить планировщик.")
         # Обязательная веха CLAUDE.md §9 «Пуск тепла в паркинге» снимается вместе с
         # прочими задачами блока — CLAUDE.md §12 запрещает снимать её молча.
         # BND-TC-004 писан для паркинга как отдельного объекта (связь от монтажа
@@ -694,14 +752,22 @@ class Build:
         # корпуса, и пуск тепла для них покрывается общей вехой корпуса «Пуск
         # тепла корпус» (BND-TC-003). Правила для встроенного варианта комплект
         # не содержит — открытый вопрос владельцу, а не молчаливое решение.
-        self.note("BND-TC-004 — открытый вопрос",
-                  "Веха «Пуск тепла в паркинге» снята: при встроенном паркинге отдельного "
-                  "объекта «паркинг» нет, а BND-TC-004 привязан именно к нему (монтаж ИТП, "
-                  "отопление паркинга, наружное теплоснабжение своего объекта). Подземные "
-                  "уровни корпуса входят в тепловой контур корпуса, и пуск тепла для них "
-                  "покрывает веха «Пуск тепла корпус» (BND-TC-003). Правила самостоятельной "
-                  "вехи для встроенного паркинга комплект не содержит — требует решения "
-                  "владельца; до него веха считается неприменимой.")
+        self.note("BND-TC-004 · ТЭП",
+                  "Паркинг отсутствует по ТЭП. Веха «Пуск тепла в паркинге» неприменима; "
+                  "пуск тепла проверяется отдельно для каждого корпуса (BND-TC-003).")
+
+    def apply_absent_piles(self) -> None:
+        piles = self.p.get("нулевой_цикл", {}).get("сваи")
+        if piles is None or any(item.get("количество", 0) for item in piles):
+            return
+        roots = [i for i, row in enumerate(self.rows)
+                 if any(word in row["name"].lower()
+                        for word in ("свайное", "свайного", "свайном", "свайные", "свайному",
+                                     "арматурный каркас сваи", "сваи забивные"))]
+        removed = self.drop_rows(roots, "ТЭП: сваи отсутствуют; свайные РД, тендеры, работы и вехи неприменимы")
+        self.note("ТЭП · сваи отсутствуют", f"Снято {removed} неприменимых свайных строк; "
+                  "ссылки обработаны штатным drop_rows и раскрыты в «Обоснование». "
+                  "Общий блок РД котлована сохранён для ограждения и земляных работ.")
 
     # ==================================================================
     # 6. Нормативы и поэтажная развёртка
@@ -850,7 +916,7 @@ class Build:
 
     def apply_standards(self) -> None:
         zc = self.p["нулевой_цикл"]
-        wall = zc["ограждение_котлована"].lower()
+        wall = zc.get("ограждение_котлована", "трубошпунт").lower()
         pk = self.parking_prefix
 
         # DEC-38: пользовательская дата старта проекта обозначает дату
@@ -927,12 +993,18 @@ class Build:
                  "Шаблон от 02.08.2026 разбил плиту по корпусам, поэтому порог 45 этажей "
                  "применяется к каждому корпусу отдельно — прежняя неоднозначность R-44 снята")
 
-        lv = zc.get("этажей_подземных", 1)
-        below = Std.BELOW_ZERO[0] * lv
+        below_trace = []
         for i in self.find("По договору Монолитные конструкции ниже отм 0,000",
                            None, exact=False):
-            self.set_dur(i, below, Std.BELOW_ZERO[1])
             prefix, _ = strip_prefix(self.rows[i]["name"])
+            if prefix.startswith("К"):
+                corpus = self.p["корпуса"][int(prefix[1:]) - 1]
+                lv = corpus.get("этажей_подземных", zc.get("этажей_подземных", 1))
+            else:
+                lv = self.p.get("паркинг", {}).get("этажей_подземных", zc.get("этажей_подземных", 1))
+            below = Std.BELOW_ZERO[0] * lv
+            self.set_dur(i, below, Std.BELOW_ZERO[1])
+            below_trace.append(f"{prefix}: {lv} эт. × {Std.BELOW_ZERO[0]} = {below} дн")
             object_kind = "Паркинг" if prefix.startswith("П") else "Корпус"
             floor_phrase = (
                 "1 подземный этаж" if lv == 1 else
@@ -943,9 +1015,9 @@ class Build:
                 f"{prefix}. По договору Монолитные конструкции ниже отм 0,000 "
                 f"({floor_phrase}) {object_kind}"
             )
-        self.why("Монолит ниже 0.000", f"{below} дн на объект", Std.BELOW_ZERO[1], "высокая",
-                 f"{lv} подземн. этаж(а) × {Std.BELOW_ZERO[0]} дн; развёрнут по корпусам "
-                 f"и паркингу отдельными задачами")
+        self.why("Монолит ниже 0.000", " · ".join(below_trace), Std.BELOW_ZERO[1], "высокая",
+                 "Число подземных этажей каждого объекта — из ТЭП. При 0 этажей работа имеет "
+                 "нулевую длительность; первый этаж связан непосредственно со своей ФП.")
 
         park = self.p.get("паркинг", {})
         if park.get("есть"):
@@ -974,25 +1046,31 @@ class Build:
                  "Техпомещения 90 дн отменяют DEC-08 (было 60) — R-06")
 
         # --- ИТП (STD-VIS-001, BND-VIS-006) ---
-        itp = self.one("По договору ЦТП, ИТП с УУТЭ", pk)
-        tech = self.one("По договору Технические помещения", pk)
-        if itp is not None:
-            self.set_dur(itp, Std.ITP[0], Std.ITP[1])
-            if tech is not None:
-                self.rows[itp]["links"] = [(self.rows[tech]["key"], "НН", Bnd.LAG_ITP[0])]
-                self.rows[itp]["comment"] = (f"BND-VIS-006: НН +{Bnd.LAG_ITP[0]} дн от старта "
-                                             f"отделки техпомещений · {Std.ITP[1]}")
+        service_prefixes = ([pk] if park.get("есть") else list(self.corpus_prefix.values()))
+        for service_prefix in service_prefixes:
+            itp = self.one("По договору ЦТП, ИТП с УУТЭ", service_prefix)
+            tech = self.one("По договору Технические помещения", service_prefix)
+            if itp is not None:
+                self.set_dur(itp, Std.ITP[0], Std.ITP[1])
+                if tech is not None:
+                    self.rows[itp]["links"] = [(self.rows[tech]["key"], "НН", Bnd.LAG_ITP[0])]
+                    self.rows[itp]["comment"] = (f"BND-VIS-006: НН +{Bnd.LAG_ITP[0]} дн от старта "
+                                                 f"отделки техпомещений · {Std.ITP[1]}")
         self.why("ЦТП/ИТП", f"{Std.ITP[0]} дн, НН +{Bnd.LAG_ITP[0]} дн от техпомещений",
                  Std.ITP[1], "средняя",
                  "R-03/R-04: отменяют DEC-06 — было 200 дн и НН +90 от кладки перегородок")
 
         # --- отделка техпомещений: НН +21 от старта кладки паркинга (BND-VIS-004) ---
-        masonry_pk = self.one("По договору Кладка наружных и внутренних стен и перегородок", pk)
-        if tech is not None and masonry_pk is not None:
-            self.rows[tech]["links"] = [(self.rows[masonry_pk]["key"], "НН",
-                                         Bnd.LAG_TECH_ROOMS[0])]
-            self.rows[tech]["comment"] = (f"BND-VIS-004: НН +{Bnd.LAG_TECH_ROOMS[0]} дн от старта "
-                                          f"кладки паркинга · {Std.TECH_ROOMS[1]}")
+        for service_prefix in service_prefixes:
+            tech = self.one("По договору Технические помещения", service_prefix)
+            masonry_pk = self.one("По договору Кладка наружных и внутренних стен и перегородок", service_prefix)
+            self.set_dur(tech, Std.TECH_ROOMS[0], Std.TECH_ROOMS[1])
+            self.set_dur(masonry_pk, Std.PARKING_MASONRY[0], Std.PARKING_MASONRY[1])
+            if tech is not None and masonry_pk is not None:
+                self.rows[tech]["links"] = [(self.rows[masonry_pk]["key"], "НН", Bnd.LAG_TECH_ROOMS[0])]
+                self.rows[tech]["comment"] = (f"BND-VIS-004: НН +{Bnd.LAG_TECH_ROOMS[0]} дн от старта "
+                                              f"кладки обеспечивающего блока {service_prefix}; "
+                                              f"без паркинга — адаптация R-05 · {Std.TECH_ROOMS[1]}")
 
         # --- ВИС паркинга (STD-VIS-007) ---
         for i in self.find("По договору", pk, exact=False):
@@ -1044,12 +1122,19 @@ class Build:
 
         kids = self.subtree(head)
         old_keys = [self.rows[j]["key"] for j in kids]
-        below = self.one("По договору Монолитные конструкции ниже отм 0,000", pref,
-                         exact=False)
+        underground = corpus.get("этажей_подземных",
+                                 self.p["нулевой_цикл"].get("этажей_подземных", 1))
+        predecessor_name = ("По договору Фундаменты Корпус" if underground == 0 else
+                            "По договору Монолитные конструкции ниже отм 0,000")
+        below = self.one(predecessor_name, pref, exact=False)
         if below is None:
             raise SystemExit(
-                f"Не найден покорпусный подземный монолит для старта 1 этажа {corpus['код']}.")
+                f"Не найден предшественник «{predecessor_name}» для старта 1 этажа {corpus['код']}.")
         head_links = [(self.rows[below]["key"], "ОН", 0)]
+        if underground == 0:
+            self.why(f"Старт 1 этажа {corpus['код']}", "ОН +0 от ФП своего корпуса",
+                     "Решение пользователя 31.08.2026 · DEC-36, дополнение", "высокая",
+                     "Подземных этажей нет; первый этаж начинается после завершения своей ФП.")
         lvl = self.rows[head]["lvl"] + 1
         del self.rows[kids[0]:kids[-1] + 1]
 
@@ -1144,6 +1229,74 @@ class Build:
         backward_pass(nodes)
         return nodes
 
+    def constrain_tender_tz(self, nodes: dict[str, Node], lead_days: int = 15) -> int:
+        """Задать SNET на ТЗ основного тендера от раннего старта связанного СМР.
+
+        Нормативная перепривязка СМР может заменить исходную связь на договор
+        физическим предшественником. Поэтому принадлежность работы договору
+        читается из сохранённых `tpl_links`, а дата — из уже рассчитанной сети.
+        """
+        summaries = self.summaries()
+        applied = 0
+
+        for contract_i, contract in enumerate(self.rows):
+            _, contract_name = strip_prefix(contract["name"])
+            if not contract_name.startswith("Заключение договора "):
+                continue
+
+            tender_i = next((i for i in self.ancestors(contract_i)
+                             if strip_prefix(self.rows[i]["name"])[1].startswith("Тендер ")),
+                            None)
+            if tender_i is None:
+                continue
+            tender = self.rows[tender_i]
+            if "номинация" in strip_prefix(tender["name"])[1].lower():
+                continue
+
+            direct_children = [i for i in self.subtree(tender_i)
+                               if self.rows[i]["lvl"] == tender["lvl"] + 1]
+            tz_i = next((i for i in direct_children
+                         if strip_prefix(self.rows[i]["name"])[1].startswith("Подготовка ТЗ ")),
+                        None)
+            if tz_i is None or contract_i not in direct_children or tz_i > contract_i:
+                continue
+
+            smrs = []
+            for i, row in enumerate(self.rows):
+                if row["key"] in summaries or not row.get("dur") or row.get("phase") != "B":
+                    continue
+                template_links = row.get("tpl_links", row.get("links", []))
+                if any(target == contract["key"] for target, _, _ in template_links):
+                    node = nodes.get(row["key"])
+                    if node and node.start:
+                        smrs.append((node.start, i))
+            if not smrs:
+                continue
+
+            earliest_start, earliest_i = min(smrs, key=lambda item: item[0])
+            chain_days = sum((self.rows[i].get("dur") or 0) for i in direct_children
+                             if tz_i <= i <= contract_i)
+            constraint_date = earliest_start - timedelta(days=chain_days + lead_days)
+            tz = self.rows[tz_i]
+            tz["constraint_type"] = "Начало не ранее"
+            tz["constraint_date"] = dfmt(constraint_date)
+            rule_comment = (
+                f"Тендер: Начало не ранее {dfmt(constraint_date)} = старт раннего СМР "
+                f"{dfmt(earliest_start)} − цепочка ТЗ→договор {chain_days} дн − "
+                f"{lead_days} дн опережения"
+            )
+            tz["comment"] = " · ".join(filter(None, [tz.get("comment", ""), rule_comment]))
+            self.why(
+                f"Контрактация: {strip_prefix(tender['name'])[1]}",
+                f"ТЗ SNET {dfmt(constraint_date)}",
+                "Решение владельца 02.09.2026 · typGRP.md §9.1",
+                "высокая",
+                f"Ранний связанный СМР «{self.rows[earliest_i]['name']}» — "
+                f"{dfmt(earliest_start)}; цепочка {chain_days} дн; опережение {lead_days} дн.")
+            applied += 1
+
+        return applied
+
     def report_anchors(self, nodes: dict[str, Node]) -> None:
         anchored = [k for k, n in nodes.items() if n.anchor_start and not n.links]
         if not anchored:
@@ -1166,11 +1319,10 @@ class Build:
         has_parking = self.p.get("паркинг", {}).get("есть", False)
 
         # ИТП общий, лежит в паркинге (BND-VIS-006)
-        itp = self.one("По договору ЦТП, ИТП с УУТЭ", pk)
-        itp_finish = nodes[self.rows[itp]["key"]].finish if itp is not None else None
-
         for corpus in self.p["корпуса"]:
             pref = self.corpus_prefix[corpus["код"]]
+            itp = self.one("По договору ЦТП, ИТП с УУТЭ", pk if has_parking else pref)
+            itp_finish = nodes[self.rows[itp]["key"]].finish if itp is not None else None
             gl = corpus.get("остекление", {})
             n_fl = corpus["этажей_надземных"]
 
@@ -1861,6 +2013,7 @@ def main(argv: list[str] | None = None) -> int:
     b.configure_parking()
     b.apply_finishing_scope()   # DEC-30 — до нормативов: снятым строкам нормативы не нужны
     b.apply_standards()
+    b.apply_absent_piles()
     for corpus in project["корпуса"]:
         b.rebuild_monolith(corpus)
 
@@ -1868,6 +2021,8 @@ def main(argv: list[str] | None = None) -> int:
     b.thermal(nodes)
     b.wire_zos()
     nodes = b.schedule()          # проход 2 — после теплового блока
+    b.constrain_tender_tz(nodes)
+    nodes = b.schedule()          # проход 3 — ограничения ТЗ от раннего старта СМР
     b.report_anchors(nodes)
     rows = b.finalize(nodes)
 

@@ -212,8 +212,15 @@ def _context_preflight(arguments: dict[str, Any]) -> dict[str, Any]:
             continue
         actual_hash = _sha256(path)
         expected_hash = str(entry.get("sha256", "")).upper()
-        entry_ok = actual_hash == expected_hash
-        if actual_hash != expected_hash:
+        hash_matches = actual_hash == expected_hash
+        # DEC-41: текущий приложенный корпоративный MPP авторитетен сам по
+        # себе. Его наличие, точное имя и единственность проверяются ниже;
+        # устаревший SHA256 в манифесте preflight не блокирует.
+        accepted_current_template = (
+            not hash_matches and path.resolve() == DEFAULT_MPP_TEMPLATE.resolve()
+        )
+        entry_ok = hash_matches or accepted_current_template
+        if not hash_matches and not accepted_current_template:
             issues.append({
                 "code": "HASH_MISMATCH", "path": str(relative),
                 "message": f"SHA256 {actual_hash}, ожидался {expected_hash}",
@@ -231,10 +238,18 @@ def _context_preflight(arguments: dict[str, Any]) -> dict[str, Any]:
                         "code": "VERSION_MISMATCH", "path": str(relative),
                         "message": f"не найден маркер {marker}",
                     })
-        verified.append({
+        verified_entry = {
             "path": str(relative), "version": entry.get("version"),
             "verified": entry_ok,
-        })
+        }
+        if accepted_current_template:
+            verified_entry.update({
+                "accepted_current_template": True,
+                "actual_sha256": actual_hash,
+                "manifest_sha256": expected_hash,
+                "policy": "DEC-41",
+            })
+        verified.append(verified_entry)
 
     templates = sorted((ROOT / "data").glob("*.mpp"))
     if templates != [DEFAULT_MPP_TEMPLATE]:

@@ -131,6 +131,10 @@ try {
     if ($null -eq $importProject) { throw "MS Project did not open the MSPDI schedule" }
     $importProjectStart = [datetime]$importProject.ProjectStart
 
+    # Clipboard task transfer requires an active task-row selection. A hidden
+    # Project window can leave the Gantt pane active and EditPaste unavailable.
+    $projectApp.Visible = $true
+    $projectApp.SelectRow(1, $false) | Out-Null
     $projectApp.SelectAll() | Out-Null
     $projectApp.EditCopy() | Out-Null
     $projectApp.WindowActivate($templateWindowName) | Out-Null
