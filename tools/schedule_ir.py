@@ -217,7 +217,7 @@ def schedule_from_grp(project: dict[str, Any], rows: list[dict[str, Any]]) -> Sc
 
 
 def validate_schedule_ir(schedule: ScheduleProject) -> list[IRIssue]:
-    """Проверяет контракт и ссылочную целостность IR без пересчёта дат."""
+    """Проверяет контракт, сеть и календарную выполнимость без изменения дат."""
     issues: list[IRIssue] = []
     issues.extend(IRIssue("IR-SHARED-SECTION", message) for message in
                   shared_section_errors((t.name, t.outline_level) for t in schedule.tasks))
@@ -235,6 +235,7 @@ def validate_schedule_ir(schedule: ScheduleProject) -> list[IRIssue]:
     graph: dict[str, list[str]] = {task_id: [] for task_id in known}
     previous_level = 0
     calendar_ids = {calendar.calendar_id for calendar in schedule.calendars}
+    by_id = {task.task_id: task for task in schedule.tasks}
     for index, task in enumerate(schedule.tasks):
         if (task.outline_level < 1 or (index == 0 and task.outline_level != 1)
                 or (index and task.outline_level > previous_level + 1)):
@@ -242,6 +243,16 @@ def validate_schedule_ir(schedule: ScheduleProject) -> list[IRIssue]:
         previous_level = task.outline_level
         if task.task_type not in TASK_TYPES:
             issues.append(IRIssue("IR-TASK-TYPE", f"Неизвестный тип {task.task_type}", task.task_id))
+        if task.start is None or task.finish is None:
+            issues.append(IRIssue("IR-DATES-REQUIRED", "Не заданы начало или окончание", task.task_id))
+        if task.task_type == "task" and task.duration_days is None:
+            issues.append(IRIssue("IR-DURATION-REQUIRED", "Не задана длительность работы", task.task_id))
+        if (task.percent_complete is not None and
+                (type(task.percent_complete) is not int or not 0 <= task.percent_complete <= 100)):
+            issues.append(IRIssue("IR-PERCENT", "Процент завершения должен быть целым числом 0–100", task.task_id))
+        if (task.constraint_type == "start_no_earlier_than" and task.start is not None
+                and task.constraint_date is not None and task.start < task.constraint_date):
+            issues.append(IRIssue("IR-CONSTRAINT-VIOLATION", "Начало раньше даты «Начало не ранее»", task.task_id))
         if task.calendar_id not in calendar_ids:
             issues.append(IRIssue("IR-CALENDAR", "Неизвестный календарь", task.task_id))
         if task.constraint_type not in CONSTRAINT_TYPES:
@@ -293,6 +304,17 @@ def validate_schedule_ir(schedule: ScheduleProject) -> list[IRIssue]:
                 issues.append(IRIssue("IR-LINK-SELF", "Задача ссылается сама на себя", task.task_id))
             else:
                 graph[task.task_id].append(link.predecessor_id)
+                predecessor = by_id[link.predecessor_id]
+                if link.type in LINK_TYPES:
+                    source = predecessor.finish if link.type[0] == "F" else predecessor.start
+                    target = task.finish if link.type[1] == "F" else task.start
+                    if type(link.lag_days) is not int:
+                        issues.append(IRIssue("IR-LAG", "Лаг должен быть целым числом календарных дней", task.task_id))
+                    elif source is not None and target is not None and (target - source).days < link.lag_days:
+                        ru_type = {"FS": "ОН", "SS": "НН", "FF": "ОО", "SF": "НО"}[link.type]
+                        issues.append(IRIssue("IR-LINK-DATES",
+                            f"Нарушена связь {predecessor.task_id} → {task.task_id}: {ru_type} {link.lag_days:+d} дней",
+                            task.task_id))
 
     state: dict[str, int] = {}
 

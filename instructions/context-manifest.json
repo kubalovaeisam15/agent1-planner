@@ -87,7 +87,7 @@
     {
       "path": "tools/schedule_ir.py",
       "version": "ir-validator",
-      "sha256": "864A37C8B4DFEC95D6BCE914A43506F8B8FEA9F5B8615FF1ADAA90644282B4A0"
+      "sha256": "44E621393EB8FD7B4B3D45EFAACC6F5FA0800FC121DECC055B1BF2371ACFB9E6"
     },
     {
       "path": "tools/mpp_validator.py",
