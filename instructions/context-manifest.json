@@ -7,7 +7,7 @@
       "path": "AGENTS.md",
       "version": "7.11",
       "version_marker": "Версия файла: 7.11",
-      "sha256": "3586DA72DDF95F889DD16FAC2C527859EC46E00413A70F434819D13AAC7C6471"
+      "sha256": "976E0A8ADE41EF3B7531122A4B47D6EF17E7285F9F34608A707B2093DC192FA5"
     },
     {
       "path": "CLAUDE.md",
@@ -19,7 +19,7 @@
       "path": "instructions/agent-policy-full.md",
       "version": "7.9",
       "version_marker": "Версия файла: 7.9",
-      "sha256": "40BF0947A80647B3F2054537B99E6FB67BA14A966FD3F335647CA8322D17F657"
+      "sha256": "136E9FE2D06E625035FDCFC8563A2434EBC5C24C126485383A67B6D242B415FC"
     },
     {
       "path": "instructions/typGRP.md",
@@ -47,12 +47,17 @@
     {
       "path": "tools/build_grp.py",
       "version": "generator",
-      "sha256": "B85D64424AA9086583E24425A207CF8B0D0087B11D49A7B0EE6E54597E38653E"
+      "sha256": "425420E96DA442906C5F39FA2BBA327660DAB161C294ED6A0F4E1D10486CF0FE"
+    },
+    {
+      "path": "tools/project_ir_validation.py",
+      "version": "project-ir-glazing-validator",
+      "sha256": "1D727605D360D4B34625382C749D3BA6C9EA30632BAFFA75B7B3F5145E307F00"
     },
     {
       "path": "tests/project.template.json",
       "version": "input-contract",
-      "sha256": "F48E6E39932EAF16ED3CB93A1290FAF83114FBE4B3637ADDC8D481236C96B1F7"
+      "sha256": "15B11DB2D9DC618D859F9A4F6303CD22A0C11F109482259CBE1BC272239E22B1"
     },
     {
       "path": "tests/template_parsed.json",
@@ -77,7 +82,7 @@
     {
       "path": "tools/shared_sections.py",
       "version": "shared-sections-DEC-40",
-      "sha256": "21E309502A55116E0CB1ECEDEF1B242D578CCA43567C4E3FEB1BC8C2B70D972B"
+      "sha256": "7ED15DE3EDF271091B86787132B9CCDCE49A0A0198AC988ECA457A1F90DAFB72"
     },
     {
       "path": "tools/parse_template.py",
@@ -87,12 +92,17 @@
     {
       "path": "tools/schedule_ir.py",
       "version": "ir-validator",
-      "sha256": "44E621393EB8FD7B4B3D45EFAACC6F5FA0800FC121DECC055B1BF2371ACFB9E6"
+      "sha256": "E100036B53108E437EE4D9760C1A9A492D1C84D66F5CB4F6AD4B604ED3AE3527"
     },
     {
       "path": "tools/mpp_validator.py",
       "version": "mpp-validator",
-      "sha256": "FE4BD2EA2B4F12885FB5DB6FA76782C156D8AB62E8ADB3842C2C9584CD6788F5"
+      "sha256": "66CE3DB65767390B71E0774330C93DBE10F42BC7E0E09CFE9391DABFA91E8651"
+    },
+    {
+      "path": "tools/validate_grp.py",
+      "version": "excel-validator",
+      "sha256": "AF89875C3EAC41EBA0BFE752DDECD00D72BAFFBC71603602D05EF1303C310B03"
     }
   ]
 }

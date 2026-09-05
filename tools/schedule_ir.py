@@ -216,11 +216,63 @@ def schedule_from_grp(project: dict[str, Any], rows: list[dict[str, Any]]) -> Sc
     )
 
 
-def validate_schedule_ir(schedule: ScheduleProject) -> list[IRIssue]:
-    """Проверяет контракт, сеть и календарную выполнимость без изменения дат."""
+def _validate_hierarchy(tasks: list[ScheduleTask]) -> list[IRIssue]:
+    """typGRP §2.2 / DEC-25: дерево задаётся порядком строк и уровнями.
+
+    parent_id не используется для свёртки: иначе повреждённая ссылка могла бы
+    одновременно подменить и родителя, и проверяемые даты. Индексы позволяют
+    проверять структуру независимо от уже диагностируемых повторов task_id.
+    """
     issues: list[IRIssue] = []
+    stack: list[int] = []
+    children: dict[int, list[ScheduleTask]] = {}
+    for index, task in enumerate(tasks):
+        if type(task.outline_level) is not int or task.outline_level < 1:
+            stack.clear()
+            continue  # IR-WBS-LEVEL выдаётся основным валидатором.
+        while stack and tasks[stack[-1]].outline_level >= task.outline_level:
+            stack.pop()
+        parent_index = (stack[-1] if stack and
+                        tasks[stack[-1]].outline_level == task.outline_level - 1 else None)
+        parent = tasks[parent_index] if parent_index is not None else None
+        expected_id = parent.task_id if parent else None
+        if task.parent_id != expected_id or (task.outline_level > 1 and parent is None):
+            issues.append(IRIssue("IR-PARENT",
+                f"Родитель не соответствует порядку WBS: ожидается {expected_id!r}, указан {task.parent_id!r}",
+                task.task_id))
+        if parent_index is not None:
+            children.setdefault(parent_index, []).append(task)
+            if parent.task_type != "summary":
+                issues.append(IRIssue("IR-PARENT-TYPE",
+                    f"Родитель {parent.task_id} должен быть суммарной задачей", task.task_id))
+        stack.append(index)
+
+    for index, task in enumerate(tasks):
+        if task.task_type != "summary":
+            continue
+        direct = children.get(index, [])
+        if not direct:
+            issues.append(IRIssue("IR-SUMMARY-EMPTY", "У суммарной задачи нет подзадач", task.task_id))
+            continue
+        # Каждый вложенный свёрточный узел проверяется отдельно; свёртка
+        # непосредственных детей эквивалентна свёртке всего корректного поддерева.
+        if all(t.start is not None and t.finish is not None for t in direct):
+            start = min(t.start for t in direct)
+            finish = max(t.finish for t in direct)
+            if task.start != start or task.finish != finish:
+                issues.append(IRIssue("IR-SUMMARY-DATES",
+                    f"DEC-25: даты суммарной задачи должны быть {start} — {finish} по подзадачам",
+                    task.task_id))
+    return issues
+
+
+def validate_schedule_ir(schedule: ScheduleProject, *, require_all_sections: bool = True) -> list[IRIssue]:
+    """Полный ГРП по умолчанию; False — явная проверка фрагмента, не приёмка ГРП."""
+    issues: list[IRIssue] = []
+    issues.extend(_validate_hierarchy(schedule.tasks))
     issues.extend(IRIssue("IR-SHARED-SECTION", message) for message in
-                  shared_section_errors((t.name, t.outline_level) for t in schedule.tasks))
+                  shared_section_errors(((t.name, t.outline_level) for t in schedule.tasks),
+                                        require_all=require_all_sections))
     if schedule.schema_version != SCHEMA_VERSION:
         issues.append(IRIssue("IR-SCHEMA", f"Ожидалась версия {SCHEMA_VERSION}"))
     if schedule.project_start is None:
@@ -231,16 +283,15 @@ def validate_schedule_ir(schedule: ScheduleProject) -> list[IRIssue]:
     if len(ids) != len(known):
         issues.append(IRIssue("IR-DUPLICATE-ID", "Идентификаторы задач не уникальны"))
 
-    position = {task_id: index for index, task_id in enumerate(ids)}
     graph: dict[str, list[str]] = {task_id: [] for task_id in known}
     previous_level = 0
     calendar_ids = {calendar.calendar_id for calendar in schedule.calendars}
     by_id = {task.task_id: task for task in schedule.tasks}
     for index, task in enumerate(schedule.tasks):
-        if (task.outline_level < 1 or (index == 0 and task.outline_level != 1)
+        if (type(task.outline_level) is not int or task.outline_level < 1 or (index == 0 and task.outline_level != 1)
                 or (index and task.outline_level > previous_level + 1)):
             issues.append(IRIssue("IR-WBS-LEVEL", "Некорректный скачок уровня WBS", task.task_id))
-        previous_level = task.outline_level
+        previous_level = task.outline_level if type(task.outline_level) is int else 0
         if task.task_type not in TASK_TYPES:
             issues.append(IRIssue("IR-TASK-TYPE", f"Неизвестный тип {task.task_type}", task.task_id))
         if task.start is None or task.finish is None:
@@ -264,14 +315,12 @@ def validate_schedule_ir(schedule: ScheduleProject) -> list[IRIssue]:
             issues.append(IRIssue("IR-CONSTRAINT-DATE",
                                   "Для «Начало не ранее» не задана дата",
                                   task.task_id))
-        if task.outline_level > 1 and task.parent_id is None:
-            issues.append(IRIssue("IR-PARENT", "У вложенной задачи нет родителя", task.task_id))
-        elif task.parent_id is not None:
-            if task.parent_id not in known or position.get(task.parent_id, index) >= index:
-                issues.append(IRIssue("IR-PARENT", "Родитель отсутствует или стоит ниже задачи",
-                                      task.task_id))
         if task.task_type == "summary" and task.duration_days is not None:
             issues.append(IRIssue("IR-SUMMARY-DURATION", "У суммарной задачи задана длительность",
+                                  task.task_id))
+        if task.task_type == "summary" and task.percent_complete is not None:
+            issues.append(IRIssue("IR-SUMMARY-PERCENT",
+                                  "typGRP §2.2: у суммарной задачи процент завершения должен быть пустым",
                                   task.task_id))
         if task.task_type == "milestone" and task.duration_days != 0:
             issues.append(IRIssue("IR-MILESTONE-DURATION", "Длительность вехи должна быть 0",

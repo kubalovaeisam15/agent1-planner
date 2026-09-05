@@ -246,11 +246,12 @@ def _ancestor_map(tasks: list[MPPTask]) -> dict[int, tuple[int, ...]]:
     return ancestors
 
 
-def validate_snapshot(snapshot: MPPSnapshot) -> list[MPPIssue]:
+def validate_snapshot(snapshot: MPPSnapshot, *, require_all_sections: bool = True) -> list[MPPIssue]:
     """Проверяет структуру и качество сети независимо от исходного IR."""
     issues: list[MPPIssue] = []
     issues.extend(MPPIssue("error", "MPP-SHARED-SECTION", message) for message in
-                  shared_section_errors((t.name, t.outline_level) for t in snapshot.tasks))
+                  shared_section_errors(((t.name, t.outline_level) for t in snapshot.tasks),
+                                        require_all=require_all_sections))
     if snapshot.calculation_mode is not None and snapshot.calculation_mode != -1:
         issues.append(MPPIssue(
             "error", "MPP-CALCULATION-MODE",

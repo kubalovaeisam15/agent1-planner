@@ -47,6 +47,7 @@ from grp_model import (  # noqa: E402
     seasonal_duration,
 )
 from schedule_ir import schedule_from_grp, validate_schedule_ir  # noqa: E402
+from project_ir_validation import validate_project_against_ir  # noqa: E402
 from output_paths import new_output_path  # noqa: E402
 
 # Консоль Windows может быть в cp1251: не даём выводу падать на символах,
@@ -97,6 +98,118 @@ def strip_prefix(name: str) -> tuple[str, str]:
     """«К1. Монтаж фасадов» → («К1», «Монтаж фасадов»)."""
     m = PREFIX_RE.match(name)
     return (m.group(1), name[m.end():]) if m else ("", name)
+
+
+def validate_project_spec(project: object) -> list[str]:
+    """Проверить обязательный контракт ТЭП до начала расчёта.
+
+    Возвращает все найденные ошибки одним списком. Функция ничего не меняет во
+    входном объекте и не применяет умолчания к пяти блокирующим группам из
+    AGENTS.md: корпуса/этажность, подземная часть, фасад, покорпусное
+    остекление, типы и количество свай.
+    """
+    issues: list[str] = []
+    if not isinstance(project, dict):
+        return ["корневой JSON должен быть объектом"]
+
+    if not isinstance(project.get("название"), str) or not project["название"].strip():
+        issues.append("название: требуется непустая строка")
+
+    start = project.get("старт_проекта")
+    if not isinstance(start, str) or not start.strip():
+        issues.append("старт_проекта: требуется дата в формате ДД.ММ.ГГГГ")
+    else:
+        try:
+            dparse(start)
+        except (TypeError, ValueError):
+            issues.append("старт_проекта: требуется корректная дата в формате ДД.ММ.ГГГГ")
+
+    zero_cycle = project.get("нулевой_цикл")
+    global_underground = (zero_cycle.get("этажей_подземных")
+                          if isinstance(zero_cycle, dict) else None)
+    corpuses = project.get("корпуса")
+    if not isinstance(corpuses, list) or not corpuses:
+        issues.append("корпуса: требуется непустой список корпусов")
+    else:
+        seen_codes: set[str] = set()
+        for index, corpus in enumerate(corpuses, start=1):
+            address = f"корпуса[{index}]"
+            if not isinstance(corpus, dict):
+                issues.append(f"{address}: требуется объект")
+                continue
+
+            code = corpus.get("код")
+            if not isinstance(code, str) or not code.strip():
+                issues.append(f"{address}.код: требуется непустая строка")
+            elif code in seen_codes:
+                issues.append(f"{address}.код: код «{code}» повторяется")
+            else:
+                seen_codes.add(code)
+
+            above = corpus.get("этажей_надземных")
+            if isinstance(above, bool) or not isinstance(above, int) or above < 1:
+                issues.append(f"{address}.этажей_надземных: требуется целое число не меньше 1")
+
+            underground = corpus.get("этажей_подземных", global_underground)
+            if (isinstance(underground, bool) or not isinstance(underground, int)
+                    or underground < 0):
+                issues.append(
+                    f"{address}.этажей_подземных: требуется целое число не меньше 0 "
+                    "в корпусе или в нулевой_цикл.этажей_подземных"
+                )
+
+            glazing = corpus.get("остекление")
+            if not isinstance(glazing, dict):
+                hint = ("; верхнеуровневое поле «остекление» не используется"
+                        if "остекление" in project else "")
+                issues.append(f"{address}.остекление: требуется объект{hint}")
+            else:
+                for field in ("пвх", "витражи", "витражи_на_всю_высоту"):
+                    if not isinstance(glazing.get(field), bool):
+                        issues.append(f"{address}.остекление.{field}: требуется true или false")
+                if (isinstance(glazing.get("пвх"), bool)
+                        and isinstance(glazing.get("витражи"), bool)
+                        and not glazing["пвх"] and not glazing["витражи"]):
+                    issues.append(f"{address}.остекление: должен быть выбран хотя бы один тип")
+                if (glazing.get("витражи_на_всю_высоту") is True
+                        and glazing.get("витражи") is False):
+                    issues.append(
+                        f"{address}.остекление.витражи_на_всю_высоту: не может быть true, "
+                        "если витражи = false"
+                    )
+
+    facade = project.get("фасад")
+    facade_type = facade.get("тип") if isinstance(facade, dict) else None
+    if not isinstance(facade_type, str) or facade_type not in {"НВФ", "СФТК", "модульный"}:
+        issues.append("фасад.тип: требуется одно из значений: НВФ, СФТК, модульный")
+
+    piles = zero_cycle.get("сваи") if isinstance(zero_cycle, dict) else None
+    if not isinstance(piles, list) or not piles:
+        issues.append("нулевой_цикл.сваи: требуется непустой список с типами и количеством свай")
+    else:
+        seen_pile_types: set[str] = set()
+        allowed_pile_types = {"бнс", "забивные"}
+        for index, pile in enumerate(piles, start=1):
+            address = f"нулевой_цикл.сваи[{index}]"
+            if not isinstance(pile, dict):
+                issues.append(f"{address}: требуется объект")
+                continue
+            pile_type = pile.get("тип")
+            normalized_type = pile_type.lower() if isinstance(pile_type, str) else None
+            if normalized_type not in allowed_pile_types:
+                issues.append(f"{address}.тип: требуется БНС или забивные")
+            elif normalized_type in seen_pile_types:
+                issues.append(f"{address}.тип: тип «{pile_type}» повторяется")
+            else:
+                seen_pile_types.add(normalized_type)
+            count = pile.get("количество")
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                issues.append(f"{address}.количество: требуется целое число не меньше 0")
+            rigs = pile.get("установок", 1)
+            if isinstance(rigs, bool) or not isinstance(rigs, int) or rigs < 1:
+                issues.append(f"{address}.установок: требуется целое число не меньше 1")
+
+    return issues
 
 
 class Build:
@@ -492,7 +605,11 @@ class Build:
         for n, corpus in enumerate(self.p["корпуса"], start=1):
             gl = corpus.get("остекление", {})
             proto = stained_proto if (gl.get("витражи") and not gl.get("пвх")) else pvc_proto
-            src_pref = "К2" if proto is stained_proto else "К1"
+            src_pref = strip_prefix(proto[1]["name"])[0]
+            # BND-SPK-003: прототип задаёт структуру, но не ограничивает
+            # предусмотренный ТЭП состав СПК. Недостающий лист берём из
+            # другого прототипа, переводя его локальные ссылки в этот корпус.
+            proto = self.glazing_prototype(proto, viable, gl)
             pref = f"К{n}"
             self.corpus_prefix[corpus["код"]] = pref
             keymap = {r["key"]: (r["key"] if r["key"].startswith("n") else self.newkey())
@@ -556,6 +673,54 @@ class Build:
                       f"Проект содержит {len(self.p['корпуса'])} корпусов. Правила нумерации и "
                       f"состава вех при 3+ корпусах владельцем не подтверждены — блоки развёрнуты "
                       f"тиражированием прототипов по составу остекления.")
+
+        for corpus in self.p["корпуса"]:
+            pref = self.corpus_prefix[corpus["код"]]
+            gl = corpus["остекление"]
+            unwanted = [i for i in self.find(
+                "По договору Монтаж светопрозрачных конструкций", pref, exact=False)
+                if (("ПВХ" in self.rows[i]["name"] and not gl["пвх"])
+                    or ("Витраж" in self.rows[i]["name"] and not gl["витражи"]))]
+            self.drop_rows(unwanted, "BND-SPK-003: неприменимый вид остекления")
+            if gl.get("витражи_на_всю_высоту"):
+                self.drop_rows(self.find("По договору Кладка наружных стен", pref),
+                               "BND-SPK-003: витражи на всю высоту, без наружной кладки")
+                pvc = self.one("По договору Монтаж светопрозрачных конструкций ПВХ", pref)
+                stained = self.one("По договору Монтаж светопрозрачных конструкций Витраж", pref, exact=False)
+                if pvc is not None and stained is not None:
+                    self.rows[pvc]["links"].append((self.rows[stained]["key"], "НН", 30))
+
+    def glazing_prototype(self, proto: list[dict], candidates: list[list[dict]],
+                          glazing: dict) -> list[dict]:
+        """Дополнить СПК без переноса ссылок на другой корпус или его дат."""
+        result = list(proto)
+        prefix = strip_prefix(proto[1]["name"])[0]
+        for field, suffix in (("пвх", "ПВХ"), ("витражи", "Витраж")):
+            name = "По договору Монтаж светопрозрачных конструкций " + suffix
+            if not glazing.get(field) or any(strip_prefix(r["name"])[1].startswith(name) for r in result):
+                continue
+            donor = next(((rows, r) for rows in candidates for r in rows
+                          if strip_prefix(r["name"])[1].startswith(name)), None)
+            if donor is None:
+                raise SystemExit(f"BND-SPK-003: в прототипах отсутствует «{name}».")
+            donor_rows, source = donor
+            local = {r["key"]: strip_prefix(r["name"])[1] for r in donor_rows}
+            target = {strip_prefix(r["name"])[1]: r["key"] for r in result}
+            links = []
+            for key, kind, lag in source["links"]:
+                if key in local:
+                    if local[key] not in target:
+                        raise SystemExit(f"BND-SPK-003: не найден локальный предшественник «{local[key]}».")
+                    key = target[local[key]]
+                links.append((key, kind, lag))
+            head = next((i for i, r in enumerate(result) if strip_prefix(r["name"])[1]
+                         == "Монтаж светопрозрачных конструкций"), None)
+            if head is None:
+                raise SystemExit("BND-SPK-003: отсутствует раздел монтажа СПК.")
+            clone = dict(source, key=self.newkey(), name=f"{prefix}. {strip_prefix(source['name'])[1]}",
+                         lvl=result[head]["lvl"] + 1, links=links, tpl_links=list(links), tpl_start="")
+            result.insert(head + 1, clone)
+        return result
 
     def configure_zero_cycle(self) -> None:
         """Фундаменты и подземный монолит разбиты по корпусам — шаблон от 02.08.2026.
@@ -1642,19 +1807,25 @@ class Build:
     # ==================================================================
     def wire_zos(self) -> None:
         i = self.one("Готовность к обмерам БТИ")
-        if i is None or not self.fit_tasks:
-            return
-        self.rows[i]["links"] = [(k, "ОН", -Bnd.LAG_BTI[0]) for k, _ in self.fit_tasks]
+        if i is None:
+            raise SystemExit("BND-ZOS-001: не найдена веха готовности к обмерам БТИ")
+        finishing = []
+        for corpus in self.p["корпуса"]:
+            head = self.one("Отделочные работы", self.corpus_prefix[corpus["код"]])
+            if head is None or not self.is_summary(head):
+                raise SystemExit(f"BND-ZOS-001: не найдена сводная отделка корпуса {corpus['код']}")
+            finishing.append(self.rows[head]["key"])
+        self.rows[i]["links"] = [(k, "ОН", -Bnd.LAG_BTI[0]) for k in finishing]
         self.rows[i]["tpl_start"] = ""
         self.rows[i]["comment"] = (f"BND-ZOS-001 (DEC-29): ОН −{Bnd.LAG_BTI[0]} дн от финиша "
                                    f"отделки каждого корпуса этапа. Веха РВЭ определяется самым "
                                    f"поздним корпусом — CLAUDE.md §4; сдвиг отделки доходит до "
                                    f"РВЭ и передачи — DEC-09")
         self.why("Блок ЗОС → РВЭ", f"ОН −{Bnd.LAG_BTI[0]} дн от отделки "
-                                   f"{len(self.fit_tasks)} задач",
+                                   f"{len(finishing)} сводных задач",
                  "bindings.md §3.10 BND-ZOS-001 · DEC-29", "средняя",
-                 "В шаблоне веха удерживалась связью на суммарные строки отделки; "
-                 "правило сохранено, цели заменены на задачи-листья")
+                 "Сохранены связи со сводной отделкой каждого корпуса; "
+                 "подмена сводных строк задачами-листьями запрещена DEC-26")
 
     # ==================================================================
     # 10. Финализация
@@ -1992,7 +2163,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Выходной файл уже существует: {destination}", file=sys.stderr)
             return 1
 
-    project = json.loads(spec.read_text(encoding="utf-8"))
+    try:
+        project = json.loads(spec.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"ТЭП не прочитан: {exc}", file=sys.stderr)
+        return 2
+
+    spec_issues = validate_project_spec(project)
+    if spec_issues:
+        print("ТЭП не прошёл входную проверку:", file=sys.stderr)
+        for issue in spec_issues:
+            print(f"  ! {issue}", file=sys.stderr)
+        return 2
+
     b = Build(project)
 
     print(f"Проект: {project['название']}")
@@ -2026,16 +2209,15 @@ def main(argv: list[str] | None = None) -> int:
     b.report_anchors(nodes)
     rows = b.finalize(nodes)
 
-    schedule_ir = None
-    if ir_out is not None:
-        schedule_ir = schedule_from_grp(project, rows)
-        ir_issues = validate_schedule_ir(schedule_ir)
-        if ir_issues:
-            print("\nSchedule IR НАРУШЕН:")
-            for issue in ir_issues:
-                address = f" [{issue.task_id}]" if issue.task_id else ""
-                print(f"  ! {issue.code}{address}: {issue.message}")
-            return 1
+    # Обе выдачи блокируются до записи, даже если отдельный файл IR не запрошен.
+    schedule_ir = schedule_from_grp(project, rows)
+    ir_issues = validate_schedule_ir(schedule_ir) + validate_project_against_ir(project, schedule_ir)
+    if ir_issues:
+        print("\nSchedule IR НАРУШЕН:")
+        for issue in ir_issues:
+            address = f" [{issue.task_id}]" if issue.task_id else ""
+            print(f"  ! {issue.code}{address}: {issue.message}")
+        return 1
 
     failed = write_excel(out, rows, b)
     if ir_out is not None and schedule_ir is not None:

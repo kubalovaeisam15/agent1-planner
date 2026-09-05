@@ -22,6 +22,7 @@ import sys
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
+from shared_sections import shared_section_errors
 
 # Консоль Windows может быть в cp1251: не даём выводу падать на символах,
 # которых нет в её кодировке (стрелки, типографика).
@@ -186,10 +187,15 @@ def label(t: dict) -> str:
 
 
 def validate(tasks: list[dict], reserve_base: datetime | None = None,
-             milestone_maps: dict[str, list[dict]] | None = None) -> int:
+             milestone_maps: dict[str, list[dict]] | None = None, *,
+             require_all_sections: bool = True) -> int:
     r = Report()
     n = len(tasks)
     print(f"Задач: {n}\n")
+    if not tasks:
+        r.errors.extend(shared_section_errors([], require_all=require_all_sections))
+        r.errors.append("График пуст")
+        return r.dump()
 
     # --- Формат строки (typGRP.md §2) -------------------------------------
     missing_cols = [c for c in COLUMNS if c not in tasks[0]]
@@ -210,6 +216,11 @@ def validate(tasks: list[dict], reserve_base: datetime | None = None,
         return r.dump()
     for t in tasks:
         t["_lvl"] = int(float(t["Уровень структуры"])) if t.get("Уровень структуры") else 0
+    r.errors.extend(shared_section_errors(
+        ((t.get("Название задачи", ""), t["_lvl"]) for t in tasks),
+        require_all=require_all_sections))
+    if not require_all_sections:
+        r.warns.append("Проверка фрагмента: полнота разделов DEC-40 не проверялась; это не приёмка полного ГРП")
 
     if any(t.get("Вид работ") or t.get("Код классификатора") for t in tasks):
         r.warns.append("справочно: часть строк несёт коды МДМ — справочник поступил, "

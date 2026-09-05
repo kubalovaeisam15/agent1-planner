@@ -10,12 +10,13 @@ from uuid import uuid4
 
 import mcp_server
 from schedule_ir import ScheduleProject, ScheduleTask
+from ir_test_fixtures import complete_sections
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def sample_schedule() -> ScheduleProject:
-    return ScheduleProject(
+    return complete_sections(ScheduleProject(
         schedule_id="mcp-test",
         name="Тест MCP",
         project_start=date(2026, 1, 1),
@@ -25,7 +26,7 @@ def sample_schedule() -> ScheduleProject:
             ScheduleTask("2", "Работа", 2, "task", parent_id="1", duration_days=5,
                          start=date(2026, 1, 1), finish=date(2026, 1, 6), critical=True),
         ],
-    )
+    ))
 
 
 def test_initialize_and_tool_catalog_are_mcp_json_rpc():
@@ -61,7 +62,7 @@ def test_context_preflight_verifies_compiled_context():
     assert content["ready"] is True
     assert content["agent_policy_version"] == "7.5"
     assert content["issue_count"] == 0
-    assert len(content["verified"]) == 17
+    assert len(content["verified"]) == 19
     assert all(item["verified"] for item in content["verified"])
     assert content["template_path"].endswith("Шаблон ГРП.mpp")
 
@@ -126,7 +127,7 @@ def test_summary_and_validation_return_structured_content():
         relative = str(ir.relative_to(ROOT))
         summary = mcp_server.call_tool("schedule_summary", {"ir_path": relative})
         assert summary["isError"] is False
-        assert summary["structuredContent"]["summary"]["task_count"] == 2
+        assert summary["structuredContent"]["summary"]["task_count"] == 16
         assert summary["structuredContent"]["summary"]["critical_leaf_count"] == 1
 
         validation = mcp_server.call_tool(

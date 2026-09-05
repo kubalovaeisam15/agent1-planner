@@ -17,11 +17,13 @@ def test_duplicate_sections_block_ir_and_mpp(name):
     schedule = ScheduleProject("test", "Тест", date(2026, 8, 1), [
         ScheduleTask(str(i), name, 1, "summary") for i in (1, 2)
     ])
-    assert "IR-SHARED-SECTION" in {i.code for i in validate_schedule_ir(schedule)}
+    assert any(i.code == "IR-SHARED-SECTION" and "повторён" in i.message
+               for i in validate_schedule_ir(schedule))
     snapshot = MPPSnapshot("Тест", None, None, [
         mpp_task(i, name, 1, summary=True) for i in (1, 2)
     ])
-    assert "MPP-SHARED-SECTION" in {i.code for i in validate_snapshot(snapshot)}
+    assert any(i.code == "MPP-SHARED-SECTION" and "повторён" in i.message
+               for i in validate_snapshot(snapshot))
 
 
 def test_shared_root_cannot_be_nested_in_corpus():

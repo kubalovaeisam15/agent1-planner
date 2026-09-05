@@ -13,6 +13,10 @@ packages/
 
 # Generated results and temporary work (never shared through Git)
 /artifacts/output/
+# Audit outputs stay local; top-level Python reproduction scripts are versioned.
+/artifacts/*/
+/artifacts/*.patch
+/tmpttwlrug9/
 /work/
 /tmp/
 /temp/

@@ -19,6 +19,8 @@ def shared_section_errors(
     rows: Iterable[tuple[str, int]], *, require_all: bool = False,
 ) -> list[str]:
     """Проверять разделы, не одноимённые работы внутри разных корпусов."""
+    if type(require_all) is not bool:
+        raise ValueError("require_all должен быть bool: полный ГРП или явный фрагмент")
     counts: Counter[str] = Counter()
     errors = []
     for name, level in rows:
@@ -36,5 +38,5 @@ def shared_section_errors(
         if counts[name] > 1:
             errors.append(f"DEC-40: «{name}» повторён {counts[name]} раз; допустим один раздел на проект")
         elif require_all and not counts[name]:
-            errors.append(f"DEC-40: в шаблоне отсутствует общий раздел «{name}»")
+            errors.append(f"DEC-40: отсутствует общий раздел «{name}»")
     return errors

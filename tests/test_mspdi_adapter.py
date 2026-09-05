@@ -7,10 +7,11 @@ from xml.etree import ElementTree as ET
 
 from mspdi_adapter import NS, schedule_to_mspdi
 from schedule_ir import ScheduleLink, ScheduleProject, ScheduleTask
+from ir_test_fixtures import complete_sections
 
 
 def sample_schedule() -> ScheduleProject:
-    return ScheduleProject(
+    return complete_sections(ScheduleProject(
         schedule_id="test-schedule",
         name="Тестовый график",
         project_start=date(2026, 1, 1),
@@ -24,14 +25,14 @@ def sample_schedule() -> ScheduleProject:
                          reserve_finish=date(2026, 1, 10),
                          predecessors=[ScheduleLink("2", "FS", 2)]),
         ],
-    )
+    ))
 
 
 def test_mspdi_preserves_wbs_calendar_duration_and_link_without_reserve_deadline():
     root = ET.fromstring(schedule_to_mspdi(sample_schedule()))
     ns = {"p": NS}
     tasks = root.findall("p:Tasks/p:Task", ns)
-    assert len(tasks) == 4  # project summary + 3 IR tasks
+    assert len(tasks) == 18  # project summary + 3 исходные задачи + 7 разделов с вехами
     work = tasks[2]
     milestone = tasks[3]
     assert work.findtext("p:OutlineNumber", namespaces=ns) == "1.1"

@@ -16,7 +16,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 CORPORATE_TEMPLATE = (ROOT / "data" / "Шаблон ГРП.mpp").resolve()
 EXPECTED = {
-    "AGENTS.md": "Версия файла: 7.10",
+    "AGENTS.md": "Версия файла: 7.11",
     "instructions/typGRP.md": "v4.6",
     "instructions/bindings.md": "v3.3",
     "instructions/standards.md": "Версия 3.4",
