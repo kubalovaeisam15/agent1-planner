@@ -19,7 +19,7 @@
       "path": "instructions/agent-policy-full.md",
       "version": "7.9",
       "version_marker": "Версия файла: 7.9",
-      "sha256": "136E9FE2D06E625035FDCFC8563A2434EBC5C24C126485383A67B6D242B415FC"
+      "sha256": "9B222A0EA7330A4850C3411EBD81992FA7965DD86F09DA5AE2D8C3A2E070A31D"
     },
     {
       "path": "instructions/typGRP.md",
@@ -31,7 +31,7 @@
       "path": "instructions/bindings.md",
       "version": "3.3",
       "version_marker": "Версия v3.3",
-      "sha256": "C1D79C414C2683684B820A2A56804155ECD45C20AB8A772E63BD39FE69E5071D"
+      "sha256": "1F163EF67AF9BA4036F0857A87EA8DC438E5F2A3FBE436B6CFD10C59DC96F438"
     },
     {
       "path": "instructions/standards.md",
@@ -47,17 +47,17 @@
     {
       "path": "tools/build_grp.py",
       "version": "generator",
-      "sha256": "425420E96DA442906C5F39FA2BBA327660DAB161C294ED6A0F4E1D10486CF0FE"
+      "sha256": "9B14E91344EB01515671CFB74DF223411D68ADA62E65BF5A8F08986C06EFA902"
     },
     {
       "path": "tools/project_ir_validation.py",
       "version": "project-ir-glazing-validator",
-      "sha256": "1D727605D360D4B34625382C749D3BA6C9EA30632BAFFA75B7B3F5145E307F00"
+      "sha256": "D85D91FC1AB7AFCFA48F401044933D6FAB4CAED698FF1C693840D0FEF6EB343C"
     },
     {
       "path": "tests/project.template.json",
       "version": "input-contract",
-      "sha256": "15B11DB2D9DC618D859F9A4F6303CD22A0C11F109482259CBE1BC272239E22B1"
+      "sha256": "D2E8F6E5961D61C3BCAA722349C88BEAABD68DEBC70AE4C3F3C60C88B32761E8"
     },
     {
       "path": "tests/template_parsed.json",

@@ -209,6 +209,30 @@ def validate_project_spec(project: object) -> list[str]:
             if isinstance(rigs, bool) or not isinstance(rigs, int) or rigs < 1:
                 issues.append(f"{address}.установок: требуется целое число не меньше 1")
 
+    if isinstance(corpuses, list) and all(isinstance(c, dict) for c in corpuses):
+        scoped = ["сваи" in c for c in corpuses]
+        positive = isinstance(piles, list) and any(isinstance(p, dict) and isinstance(p.get("количество"), int) and p["количество"] > 0 for p in piles)
+        if (any(scoped) or (positive and len(corpuses) > 1)) and not all(scoped):
+            issues.append("DEC-42: задайте корпуса[].сваи для каждого корпуса (пустой список = без свай)")
+        elif all(scoped) and corpuses:
+            totals = {}
+            for corpus in corpuses:
+                own = corpus["сваи"]
+                if not isinstance(own, list):
+                    issues.append(f"DEC-42: {corpus.get('код')}.сваи: требуется список")
+                    continue
+                # Повторное использование проверки типов, количеств и установок.
+                minimal = dict(project, корпуса=[{k: v for k, v in corpus.items() if k != "сваи"}],
+                               нулевой_цикл={"сваи": own or [{"тип": "БНС", "количество": 0}]})
+                issues.extend(f"{corpus.get('код')}: {issue}" for issue in validate_project_spec(minimal))
+                for pile in own:
+                    if isinstance(pile, dict) and isinstance(pile.get("тип"), str) and type(pile.get("количество")) is int:
+                        kind = pile["тип"].lower()
+                        totals[kind] = totals.get(kind, 0) + pile["количество"]
+            if not issues:
+                global_totals = {p["тип"].lower(): p["количество"] for p in piles}
+                if {k: v for k, v in totals.items() if v} != {k: v for k, v in global_totals.items() if v}:
+                    issues.append("DEC-42: сумма свай по корпусам не совпадает с нулевой_цикл.сваи")
     return issues
 
 
@@ -728,8 +752,8 @@ class Build:
         До этого нулевой цикл был общим целиком: одна плита «Фундаменты Корпус» на
         всю очередь. Теперь у каждого корпуса своя плита и свой блок монолита ниже
         0.000, а `STD-ZC-005` применяется к этажности **своего** корпуса — этим
-        закрыт `R-44`. Земляные работы, ограждение котлована и свайное поле
-        остаются общими на очередь.
+        закрыт `R-44`. Земляные работы и ограждение остаются общими на очередь.
+        Сваи и физические связи ФП уточняются по ТЭП в wire_corpus_piles (DEC-42).
         """
         blocks = ("Фундаменты", "По договору Фундаменты Корпус"), \
                  ("Монолитные конструкции ниже отм 0,000",
@@ -750,8 +774,8 @@ class Build:
             if not corpus_rows:
                 continue
             # Строки корпусов берутся из шаблона 1:1, как и блоки корпусов: у К1 и К2
-            # разные предшественники (плита К2 ждёт свайное поле, плита К1 — нет),
-            # и единый прототип эту разницу потерял бы.
+            # разные атрибуты. Физические предшественники ФП ниже заменяются
+            # по ТЭП в wire_corpus_piles (DEC-42).
             protos = [dict(self.rows[j], links=list(self.rows[j]["links"]))
                       for j in corpus_rows]
             for i, j in enumerate(corpus_rows):
@@ -805,7 +829,7 @@ class Build:
                 r["links"] = list(dict.fromkeys(new_links))
 
         self.why("Нулевой цикл", f"фундаменты и подземный монолит — по {len(self.p['корпуса'])} "
-                                 f"корпусам, земляные работы и сваи общие",
+                                 f"корпусам, земляные работы общие; сваи по ТЭП (DEC-42)",
                  "typGRP.md §10.2", "высокая",
                  "Шаблон от 02.08.2026 разбил плиту и подземный монолит по корпусам: "
                  "STD-ZC-005 применяется к этажности своего корпуса (R-44 закрыт)")
@@ -933,6 +957,50 @@ class Build:
         self.note("ТЭП · сваи отсутствуют", f"Снято {removed} неприменимых свайных строк; "
                   "ссылки обработаны штатным drop_rows и раскрыты в «Обоснование». "
                   "Общий блок РД котлована сохранён для ограждения и земляных работ.")
+
+    def wire_corpus_piles(self) -> None:
+        """DEC-42: физические предшественники ФП определяются ТЭП, не номером прототипа."""
+        corps = self.p["корпуса"]
+        global_piles = self.p["нулевой_цикл"]["сваи"]
+        own_piles = [c.get("сваи", global_piles if len(corps) == 1 else []) for c in corps]
+        earth = self.one("По договору Земляные работы")
+        if earth is None:
+            raise ValueError("DEC-42: отсутствуют земляные работы")
+        earth_key = self.rows[earth]["key"]
+        replacements = {}
+        own_keys = {n: [] for n in range(1, len(corps) + 1)}
+        for kind, suffix in (("бнс", "БНС"), ("забивные", "Забивные")):
+            name = f"По договору Свайное основание {suffix} (при наличии)"
+            hits = self.find(name)
+            if len(hits) != 1:
+                raise ValueError(f"DEC-42: требуется один прототип «{name}»")
+            index = hits[0]
+            proto = self.rows[index]
+            clones = []
+            for n, piles in enumerate(own_piles, 1):
+                selected = [p for p in piles if p["тип"].lower() == kind and p["количество"] > 0]
+                if not selected:
+                    continue
+                durations, _, trace = pile_type_durations(selected)
+                clone = dict(proto, key=self.newkey(), name=f"К{n}. {name}", links=list(proto["links"]),
+                             dur=durations[kind], src="BND-ZC-003 · DEC-42; STD-ZC-003/004")
+                clones.append(clone)
+                own_keys[n].append(clone["key"])
+                self.why(f"К{n}. Свайное основание {suffix}", f"{durations[kind]} дн",
+                         "DEC-42; STD-ZC-003/004", "средняя", " · ".join(trace))
+            replacements[proto["key"]] = [c["key"] for c in clones]
+            self.rows[index:index + 1] = clones
+        for row in self.rows:
+            row["links"] = list(dict.fromkeys(
+                (new, kind, lag) for key, kind, lag in row["links"]
+                for new in replacements.get(key, [key])))
+        for n, corpus in enumerate(corps, 1):
+            index = self.one("По договору Фундаменты Корпус", f"К{n}")
+            if index is None:
+                raise ValueError(f"DEC-42: отсутствует ФП К{n}")
+            self.rows[index]["links"] = [(key, "ОН", 0) for key in own_keys[n] or [earth_key]]
+            self.why(f"К{n}. Предшественники ФП", "свои сваи" if own_keys[n] else "земляные работы",
+                     "BND-ZC-003 · DEC-42 · решение владельца 06.09.2026", "высокая", "ОН +0; распределение по ТЭП")
 
     # ==================================================================
     # 6. Нормативы и поэтажная развёртка
@@ -2196,6 +2264,7 @@ def main(argv: list[str] | None = None) -> int:
     b.configure_parking()
     b.apply_finishing_scope()   # DEC-30 — до нормативов: снятым строкам нормативы не нужны
     b.apply_standards()
+    b.wire_corpus_piles()
     b.apply_absent_piles()
     for corpus in project["корпуса"]:
         b.rebuild_monolith(corpus)

@@ -36,6 +36,20 @@ def _check_milestone(ir, name, sources, lag, code, rule):
 
 def validate_project_against_ir(spec: dict, ir: ScheduleProject) -> list[IRIssue]:
     issues = []
+    # DEC-42: независимо проверяем физические связи ФП по распределению свай в ТЭП.
+    for n, corpus in enumerate(spec["корпуса"], 1):
+        own = corpus.get("сваи")
+        if own is None:
+            own = spec.get("нулевой_цикл", {}).get("сваи", []) if len(spec["корпуса"]) == 1 else []
+        expected_names = [f"К{n}. По договору Свайное основание {'БНС' if p['тип'].lower() == 'бнс' else 'Забивные'} (при наличии)"
+                          for p in own if p["количество"] > 0]
+        sources = [t for t in ir.tasks if t.name in expected_names] if expected_names else [
+            t for t in ir.tasks if t.name.endswith(". По договору Земляные работы")]
+        rafts = [t for t in ir.tasks if t.name == f"К{n}. По договору Фундаменты Корпус"]
+        required = sorted((t.task_id, "FS", 0) for t in sources)
+        if (len(rafts) != 1 or len(sources) != (len(expected_names) or 1) or
+                sorted((p.predecessor_id, p.type, p.lag_days) for p in rafts[0].predecessors) != required):
+            issues.append(IRIssue("PROJECT-FOUNDATION-PREDECESSORS", f"DEC-42: К{n}: ФП требует ОН +0 только от своих свай, при их отсутствии — от земляных работ"))
     finishing = [(f"К{n}. Отделочные работы", "summary") for n in range(1,len(spec["корпуса"])+1)]
     issues.extend(_check_milestone(ir, "Готовность к обмерам БТИ", finishing,
                                    -160, "PROJECT-BTI", "BND-ZOS-001/DEC-26/DEC-29"))
